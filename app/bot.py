@@ -28,6 +28,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 LAVA_API_KEY = os.getenv("LAVA_API_KEY")
 LAVA_OFFER_ID = os.getenv("LAVA_OFFER_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")  # ID закрытого канала
+ADMIN_ID = os.getenv("ADMIN_ID")  # ID администратора для уведомлений
 DB_PATH = DATA_DIR / "lava_payments.db"
 
 # Инициализация бота
@@ -184,43 +185,89 @@ def remove_user_from_channel(user_id):
         logger.error(f"Ошибка при удалении пользователя {user_id} из канала: {str(e)}")
         return False
 
-# Функция для проверки новых оплат и отправки уведомлений
+# Функция для отправки уведомления администратору
+def notify_admin(message):
+    if not ADMIN_ID:
+        logger.warning("ID администратора не указан. Уведомление не отправлено.")
+        return False
+    
+    try:
+        bot.send_message(
+            ADMIN_ID,
+            message,
+            parse_mode="HTML"
+        )
+        logger.info(f"Уведомление отправлено администратору: {message[:50]}...")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления администратору: {str(e)}")
+        return False
+
+# Обновляем функцию check_new_payments для отправки уведомлений администратору
 def check_new_payments():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Получаем последние записи об успешных платежах, которые еще не обработаны
     cursor.execute('''
-    SELECT id, buyer_email, product_title, amount, currency, contract_id, parent_contract_id 
+    SELECT id, buyer_email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp 
     FROM payments 
-    WHERE (status = 'subscription-active' OR status = 'active') 
-    AND processed = 0
+    WHERE processed = 0
     ''')
     
     new_payments = cursor.fetchall()
     
     for payment in new_payments:
-        payment_id, email, product_title, amount, currency, contract_id, parent_contract_id = payment
+        payment_id, email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp = payment
         
         # Извлекаем Telegram ID из email
         user_id = email.split('@')[0]
         
         try:
-            # Отправляем уведомление пользователю
-            bot.send_message(
-                user_id,
-                f"Поздравляем! Ваша подписка '{product_title}' успешно оплачена.\n"
-                f"Сумма: {amount} {currency}"
-            )
+            # Формируем сообщение для администратора
+            admin_message = f"<b>Новая операция по подписке</b>\n\n" \
+                           f"<b>Пользователь:</b> {user_id}\n" \
+                           f"<b>Продукт:</b> {product_title}\n" \
+                           f"<b>Сумма:</b> {amount} {currency}\n" \
+                           f"<b>Тип события:</b> {event_type}\n" \
+                           f"<b>Статус:</b> {status}\n" \
+                           f"<b>Дата:</b> {timestamp}\n" \
+                           f"<b>ID контракта:</b> {contract_id}"
             
-            # Добавляем пользователя в закрытый канал
-            add_user_to_channel(user_id)
+            # Отправляем уведомление администратору
+            notify_admin(admin_message)
+            
+            # Если платеж успешный, отправляем уведомление пользователю и добавляем в канал
+            if status == 'subscription-active' or status == 'active':
+                # Отправляем уведомление пользователю
+                bot.send_message(
+                    user_id,
+                    f"Поздравляем! Ваша подписка '{product_title}' успешно оплачена.\n"
+                    f"Сумма: {amount} {currency}"
+                )
+                
+                # Добавляем пользователя в закрытый канал
+                add_user_to_channel(user_id)
+                
+                logger.info(f"Отправлено уведомление пользователю {user_id} об успешной оплате")
+            elif status == 'subscription-failed' or status == 'failed':
+                # Отправляем уведомление о неудачной оплате
+                cursor.execute('SELECT error_message FROM payments WHERE id = ?', (payment_id,))
+                error_message = cursor.fetchone()[0]
+                
+                bot.send_message(
+                    user_id,
+                    f"К сожалению, оплата подписки '{product_title}' не удалась.\n"
+                    f"Причина: {error_message}\n\n"
+                    f"Вы можете попробовать снова, используя команду /subscribe"
+                )
+                
+                logger.info(f"Отправлено уведомление пользователю {user_id} о неудачной оплате")
             
             # Отмечаем платеж как обработанный
             cursor.execute('UPDATE payments SET processed = 1 WHERE id = ?', (payment_id,))
             conn.commit()
             
-            logger.info(f"Отправлено уведомление пользователю {user_id} об успешной оплате")
         except Exception as e:
             logger.error(f"Ошибка при обработке платежа {payment_id}: {str(e)}")
     
@@ -296,6 +343,11 @@ def subscribe_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
     
+    # Уведомляем администратора о попытке оформления подписки
+    admin_message = f"<b>Попытка оформления подписки</b>\n\n" \
+                   f"<b>Пользователь:</b> {username} (ID: {user_id})"
+    notify_admin(admin_message)
+    
     # Проверяем, есть ли уже активная подписка
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
@@ -303,6 +355,9 @@ def subscribe_command(message):
             message.chat.id,
             "У вас уже есть активная подписка!"
         )
+        
+        # Уведомляем администратора
+        notify_admin(f"<b>Информация:</b> У пользователя {username} (ID: {user_id}) уже есть активная подписка")
         return
     
     # Создаем ссылку на оплату
@@ -323,12 +378,21 @@ def subscribe_command(message):
         )
         
         logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
+        
+        # Уведомляем администратора
+        admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
+                       f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
+                       f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
+        notify_admin(admin_message)
     else:
         bot.send_message(
             message.chat.id,
             "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
         )
         logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
+        
+        # Уведомляем администратора об ошибке
+        notify_admin(f"<b>ОШИБКА:</b> Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
 
 @bot.message_handler(commands=['status'])
 def status_command(message):
@@ -381,6 +445,12 @@ def cancel_subscription_callback(call):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запросил отмену подписки {contract_id}")
     
+    # Уведомляем администратора о попытке отмены подписки
+    admin_message = f"<b>Попытка отмены подписки</b>\n\n" \
+                   f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
+                   f"<b>ID контракта:</b> {contract_id}"
+    notify_admin(admin_message)
+    
     # Отменяем подписку
     if cancel_subscription(user_id, contract_id):
         # Удаляем пользователя из канала
@@ -392,12 +462,20 @@ def cancel_subscription_callback(call):
             call.message.chat.id,
             call.message.message_id
         )
+        
+        # Уведомляем администратора об успешной отмене
+        notify_admin(f"<b>Подписка успешно отменена</b>\n\n" \
+                    f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
+                    f"<b>ID контракта:</b> {contract_id}")
     else:
         bot.answer_callback_query(call.id, "Ошибка при отмене подписки")
         bot.send_message(
             call.message.chat.id,
             "Произошла ошибка при отмене подписки. Пожалуйста, попробуйте позже."
         )
+        
+        # Уведомляем администратора об ошибке
+        notify_admin(f"<b>ОШИБКА:</b> Не удалось отменить подписку для пользователя {username} (ID: {user_id}), контракт {contract_id}")
 
 @bot.message_handler(content_types=['text'])
 def text_handler(message):

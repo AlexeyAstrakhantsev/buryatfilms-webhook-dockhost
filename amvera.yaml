@@ -25,4 +25,6 @@ env:
   - name: LAVA_OFFER_ID
     value: 929fffa3-10f5-4116-8602-0c397d1b7a57
   - name: CHANNEL_ID
-    value: -100123456789 
+    value: -100123456789
+  - name: ADMIN_ID
+    value: 123456789 
