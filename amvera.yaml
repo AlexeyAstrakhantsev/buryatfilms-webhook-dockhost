@@ -9,7 +9,7 @@ build:
     - /app/data
 
 run:
-  command: uvicorn main:app --host 0.0.0.0 --port $PORT
+  command: ./start.sh
   persistent-storage:
     - /app/data
 
@@ -17,4 +17,10 @@ env:
   - name: WEBHOOK_USERNAME
     value: admin
   - name: WEBHOOK_PASSWORD
-    value: secure_password 
+    value: secure_password
+  - name: BOT_TOKEN
+    value: your_telegram_bot_token
+  - name: LAVA_API_KEY
+    value: your_lava_api_key
+  - name: LAVA_OFFER_ID
+    value: 929fffa3-10f5-4116-8602-0c397d1b7a57 

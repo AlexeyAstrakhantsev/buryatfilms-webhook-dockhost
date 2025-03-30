@@ -10,5 +10,8 @@ COPY app/ .
 # Создаем директорию для данных
 RUN mkdir -p /app/data && chmod 777 /app/data
 
-# Запускаем сервер
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Запускаем скрипт для запуска обоих сервисов
+COPY start.sh .
+RUN chmod +x start.sh
+
+CMD ["./start.sh"] 
