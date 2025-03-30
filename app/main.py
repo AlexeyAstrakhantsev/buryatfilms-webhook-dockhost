@@ -74,7 +74,8 @@ def init_db():
         status TEXT NOT NULL,
         error_message TEXT,
         raw_data TEXT NOT NULL,
-        received_at TEXT NOT NULL
+        received_at TEXT NOT NULL,
+        processed INTEGER DEFAULT 0
     )
     ''')
     conn.commit()

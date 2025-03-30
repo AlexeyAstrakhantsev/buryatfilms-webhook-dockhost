@@ -23,4 +23,6 @@ env:
   - name: LAVA_API_KEY
     value: your_lava_api_key
   - name: LAVA_OFFER_ID
-    value: 929fffa3-10f5-4116-8602-0c397d1b7a57 
+    value: 929fffa3-10f5-4116-8602-0c397d1b7a57
+  - name: CHANNEL_ID
+    value: -100123456789 
