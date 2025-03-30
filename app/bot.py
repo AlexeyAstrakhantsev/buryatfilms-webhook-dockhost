@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 # Настройка логирования
-DATA_DIR = Path("/app/data")
+DATA_DIR = Path("/mount/database")
 DATA_DIR.mkdir(exist_ok=True)
 
 log_file = DATA_DIR / f"bot_{time.strftime('%Y%m%d')}.log"
@@ -73,22 +73,30 @@ def cancel_subscription(user_id, parent_contract_id):
     
     try:
         response = requests.delete(url, headers=headers, json=payload)
-        response.raise_for_status()
         
-        # Обновляем статус подписки в БД
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-        UPDATE payments 
-        SET status = 'subscription-cancelled' 
-        WHERE buyer_email = ? AND (parent_contract_id = ? OR contract_id = ?)
-        ''', (f"{user_id}@t.me", parent_contract_id, parent_contract_id))
-        conn.commit()
-        conn.close()
+        # Логируем ответ от LAVA.TOP
+        logger.info(f"Ответ от LAVA.TOP при отмене подписки: Статус {response.status_code}, Заголовки: {response.headers}")
         
-        return True
+        # Проверяем код ответа (204 означает успешную отмену)
+        if response.status_code == 204:
+            # Обновляем статус подписки в БД
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+            UPDATE payments 
+            SET status = 'subscription-cancelled' 
+            WHERE buyer_email = ? AND (parent_contract_id = ? OR contract_id = ?)
+            ''', (f"{user_id}@t.me", parent_contract_id, parent_contract_id))
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Подписка успешно отменена для пользователя {user_id}, контракт {parent_contract_id}")
+            return True
+        else:
+            logger.error(f"Ошибка при отмене подписки: код {response.status_code}, ответ: {response.text}")
+            return False
     except Exception as e:
-        logger.error(f"Ошибка при отмене подписки: {str(e)}")
+        logger.error(f"Исключение при отмене подписки: {str(e)}")
         return False
 
 # Функция для проверки статуса подписки пользователя
@@ -451,14 +459,21 @@ def cancel_subscription_callback(call):
                    f"<b>ID контракта:</b> {contract_id}"
     notify_admin(admin_message)
     
+    # Сообщаем пользователю, что запрос обрабатывается
+    bot.answer_callback_query(call.id, "Обрабатываем ваш запрос...")
+    bot.edit_message_text(
+        "Обрабатываем запрос на отмену подписки...",
+        call.message.chat.id,
+        call.message.message_id
+    )
+    
     # Отменяем подписку
     if cancel_subscription(user_id, contract_id):
-        # Удаляем пользователя из канала
+        # Удаляем пользователя из канала только при успешной отмене
         remove_user_from_channel(user_id)
         
-        bot.answer_callback_query(call.id, "Подписка успешно отменена")
         bot.edit_message_text(
-            "Ваша подписка успешно отменена.",
+            "Ваша подписка успешно отменена. Доступ к закрытому каналу прекращен.",
             call.message.chat.id,
             call.message.message_id
         )
@@ -468,10 +483,10 @@ def cancel_subscription_callback(call):
                     f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
                     f"<b>ID контракта:</b> {contract_id}")
     else:
-        bot.answer_callback_query(call.id, "Ошибка при отмене подписки")
-        bot.send_message(
+        bot.edit_message_text(
+            "Произошла ошибка при отмене подписки. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
             call.message.chat.id,
-            "Произошла ошибка при отмене подписки. Пожалуйста, попробуйте позже."
+            call.message.message_id
         )
         
         # Уведомляем администратора об ошибке

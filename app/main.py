@@ -12,7 +12,7 @@ import json
 from pydantic import BaseModel
 
 # Настройка логирования
-DATA_DIR = Path("/app/data")
+DATA_DIR = Path("/mount/database")
 DATA_DIR.mkdir(exist_ok=True)
 
 log_file = DATA_DIR / f"lava_webhook_{datetime.now().strftime('%Y%m%d')}.log"
