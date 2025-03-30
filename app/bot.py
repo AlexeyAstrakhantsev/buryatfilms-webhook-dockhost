@@ -231,14 +231,42 @@ def update_db_structure():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Проверяем, есть ли колонка processed
-    cursor.execute("PRAGMA table_info(payments)")
-    columns = [column[1] for column in cursor.fetchall()]
+    # Проверяем, существует ли таблица payments
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
+    table_exists = cursor.fetchone()
     
-    if "processed" not in columns:
-        cursor.execute("ALTER TABLE payments ADD COLUMN processed INTEGER DEFAULT 0")
+    if not table_exists:
+        # Таблица не существует, создаем её
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            product_title TEXT NOT NULL,
+            buyer_email TEXT NOT NULL,
+            contract_id TEXT NOT NULL,
+            parent_contract_id TEXT,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            raw_data TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            processed INTEGER DEFAULT 0
+        )
+        ''')
         conn.commit()
-        logger.info("Структура базы данных обновлена: добавлена колонка processed")
+        logger.info("Создана таблица payments в базе данных")
+    else:
+        # Таблица существует, проверяем наличие колонки processed
+        cursor.execute("PRAGMA table_info(payments)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if "processed" not in columns:
+            cursor.execute("ALTER TABLE payments ADD COLUMN processed INTEGER DEFAULT 0")
+            conn.commit()
+            logger.info("Структура базы данных обновлена: добавлена колонка processed")
     
     conn.close()
 
@@ -387,7 +415,18 @@ def text_handler(message):
 def check_payments_periodically():
     while True:
         try:
-            check_new_payments()
+            # Проверяем существование таблицы перед запросом
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
+            table_exists = cursor.fetchone()
+            conn.close()
+            
+            if table_exists:
+                check_new_payments()
+            else:
+                logger.warning("Таблица payments еще не создана. Пропускаем проверку платежей.")
+                
         except Exception as e:
             logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
         
@@ -396,18 +435,29 @@ def check_payments_periodically():
 
 # Функция для запуска бота в отдельном потоке
 def run_bot():
-    logger.info("Запуск бота...")
-    
-    # Обновляем структуру БД
-    update_db_structure()
-    
-    # Запускаем периодическую проверку платежей в отдельном потоке
-    payment_thread = threading.Thread(target=check_payments_periodically)
-    payment_thread.daemon = True
-    payment_thread.start()
-    
-    # Запускаем бота
-    bot.polling(none_stop=True, interval=0)
+    try:
+        logger.info("Запуск бота...")
+        
+        # Проверяем наличие токена
+        if not BOT_TOKEN:
+            logger.error("Не указан токен бота (BOT_TOKEN). Бот не будет запущен.")
+            return
+            
+        if not CHANNEL_ID:
+            logger.warning("Не указан ID канала (CHANNEL_ID). Функции работы с каналом будут недоступны.")
+        
+        # Обновляем структуру БД
+        update_db_structure()
+        
+        # Запускаем периодическую проверку платежей в отдельном потоке
+        payment_thread = threading.Thread(target=check_payments_periodically)
+        payment_thread.daemon = True
+        payment_thread.start()
+        
+        # Запускаем бота
+        bot.polling(none_stop=True, interval=0)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {str(e)}", exc_info=True)
 
 # Запуск бота в отдельном потоке
 if __name__ == "__main__":
