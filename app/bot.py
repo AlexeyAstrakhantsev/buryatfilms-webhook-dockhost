@@ -496,9 +496,6 @@ def check_subscription_expiration():
         
         # Получаем список всех участников канала
         try:
-            chat_members = bot.get_chat_members_count(CHANNEL_ID)
-            logger.debug(f"Всего участников в канале: {chat_members}")
-            
             # Проверяем права бота
             bot_member = bot.get_chat_member(CHANNEL_ID, bot.get_me().id)
             if bot_member.status != 'administrator':
@@ -506,15 +503,18 @@ def check_subscription_expiration():
                 return
             
             # Получаем всех участников канала
-            offset = 0
-            while offset < chat_members:
-                members = bot.get_chat_administrators(CHANNEL_ID)
+            try:
+                members = bot.get_chat_members(CHANNEL_ID)
+                logger.debug(f"Получен список участников канала: {len(members)} пользователей")
+                
                 for member in members:
                     user_id = str(member.user.id)
+                    logger.debug(f"Проверка пользователя {user_id} (статус: {member.status})")
                     
                     try:
-                        # Пропускаем привилегированных пользователей
-                        if user_id in PRIVILEGED_USERS or member.status == 'creator':
+                        # Пропускаем привилегированных пользователей и администраторов
+                        if (user_id in PRIVILEGED_USERS or 
+                            member.status in ['creator', 'administrator']):
                             logger.debug(f"Пропуск привилегированного пользователя {user_id}")
                             continue
                         
@@ -562,7 +562,9 @@ def check_subscription_expiration():
                         logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
                         continue
                 
-                offset += len(members)
+            except Exception as e:
+                logger.error(f"Ошибка при получении списка участников: {str(e)}", exc_info=True)
+                return
                 
         except Exception as e:
             logger.error(f"Ошибка при получении списка участников канала: {str(e)}", exc_info=True)
