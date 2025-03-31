@@ -23,7 +23,7 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("payment_bot")
-
+logging.getLogger("payment_bot").setLevel(logging.DEBUG)
 # Получение настроек из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 LAVA_API_KEY = os.getenv("LAVA_API_KEY")
