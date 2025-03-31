@@ -30,6 +30,11 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
 
+# Список привилегированных пользователей (всегда имеют доступ к каналу)
+PRIVILEGED_USERS = os.getenv("PRIVILEGED_USERS", "").split(",")  # ID через запятую в переменной окружения
+if ADMIN_ID:  # Автоматически добавляем админа в список привилегированных пользователей
+    PRIVILEGED_USERS.append(ADMIN_ID)
+
 # Обновляем словари для переводов
 PERIOD_TRANSLATIONS = {
     "MONTHLY": "1 месяц",
@@ -762,7 +767,89 @@ def check_payments_periodically():
         # Проверяем каждые 60 секунд
         time.sleep(60)
 
-# Функция для запуска бота в отдельном потоке
+# Обновляем функцию проверки подписок
+def check_subscription_expiration():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем список всех пользователей с последними статусами их подписок
+        cursor.execute('''
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+        )
+        SELECT buyer_email, status, timestamp
+        FROM LastPayments
+        WHERE rn = 1
+        ''')
+        
+        users = cursor.fetchall()
+        conn.close()
+        
+        for user in users:
+            buyer_email, status, timestamp = user
+            user_id = buyer_email.split('@')[0]  # Получаем ID пользователя из email
+            
+            # Пропускаем проверку для привилегированных пользователей
+            if user_id in PRIVILEGED_USERS:
+                logger.debug(f"Пропуск проверки для привилегированного пользователя {user_id}")
+                continue
+            
+            try:
+                # Проверяем, является ли пользователь участником канала
+                chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
+                is_member = chat_member.status not in ['left', 'kicked']
+                
+                # Если у пользователя нет активной подписки, но он в канале
+                if status not in ['subscription-active', 'active'] and is_member:
+                    logger.info(f"Удаление пользователя {user_id} из канала: подписка неактивна")
+                    remove_user_from_channel(user_id)
+                    
+                    # Уведомляем администратора
+                    notify_admin(
+                        f"<b>Пользователь удален из канала</b>\n\n"
+                        f"<b>ID пользователя:</b> {user_id}\n"
+                        f"<b>Причина:</b> Неактивная подписка\n"
+                        f"<b>Статус:</b> {status}\n"
+                        f"<b>Последнее обновление:</b> {timestamp}"
+                    )
+                
+            except Exception as e:
+                logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"Ошибка при проверке сроков подписок: {str(e)}")
+
+# Функция для периодической проверки подписок
+def check_subscriptions_periodically():
+    while True:
+        try:
+            # Проверяем существование таблицы перед запросом
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
+            table_exists = cursor.fetchone()
+            conn.close()
+            
+            if table_exists:
+                check_subscription_expiration()
+                logger.info("Выполнена проверка активных подписок")
+            else:
+                logger.warning("Таблица payments еще не создана. Пропускаем проверку подписок.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при периодической проверке подписок: {str(e)}")
+        
+        # Проверяем каждые 15 минут
+        time.sleep(900)
+
+# Обновляем функцию run_bot для запуска периодической проверки подписок
 def run_bot():
     try:
         logger.info("Запуск бота...")
@@ -782,6 +869,11 @@ def run_bot():
         payment_thread = threading.Thread(target=check_payments_periodically)
         payment_thread.daemon = True
         payment_thread.start()
+        
+        # Запускаем периодическую проверку подписок в отдельном потоке
+        subscription_thread = threading.Thread(target=check_subscriptions_periodically)
+        subscription_thread.daemon = True
+        subscription_thread.start()
         
         # Запускаем бота
         bot.polling(none_stop=True, interval=0)
