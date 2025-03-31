@@ -429,7 +429,8 @@ def subscribe_command(message):
         for price in sub["prices"]:
             period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
             button_text = f"{period_text} - {price['amount']} руб."
-            callback_data = f"pay_{sub['offer_id']}_{price['periodicity']}"
+            # Используем разделитель "|" вместо "_" для избежания конфликтов с periodicity
+            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
             period_buttons.append(
                 types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
             )
@@ -535,47 +536,59 @@ def cancel_subscription_callback(call):
         # Уведомляем администратора об ошибке
         notify_admin(f"<b>ОШИБКА:</b> Не удалось отменить подписку для пользователя {username} (ID: {user_id}), контракт {contract_id}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pay|'))
 def process_payment_callback(call):
     user_id = call.from_user.id
     username = call.from_user.username or f"user_{user_id}"
     
-    # Разбираем данные из callback
-    _, offer_id, periodicity = call.data.split('_')
+    try:
+        # Разбираем данные из callback, используя разделитель "|"
+        parts = call.data.split('|')
+        if len(parts) != 3:
+            raise ValueError("Неверный формат данных callback")
+        
+        _, offer_id, periodicity = parts
+        
+        # Создаем ссылку на оплату
+        payment_data = create_payment_link(user_id, offer_id, periodicity)
+        
+        if payment_data and "paymentUrl" in payment_data:
+            markup = types.InlineKeyboardMarkup()
+            payment_button = types.InlineKeyboardButton(
+                text="Оплатить подписку", 
+                url=payment_data["paymentUrl"]
+            )
+            markup.add(payment_button)
+            
+            period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+            bot.edit_message_text(
+                f"Для оплаты подписки на {period_text} нажмите на кнопку ниже:",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup
+            )
+            
+            logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
+            
+            # Уведомляем администратора
+            admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
+                          f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
+                          f"<b>Период:</b> {period_text}\n" \
+                          f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
+            notify_admin(admin_message)
+        else:
+            bot.answer_callback_query(
+                call.id,
+                "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
+            )
+            logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
     
-    # Создаем ссылку на оплату
-    payment_data = create_payment_link(user_id, offer_id, periodicity)
-    
-    if payment_data and "paymentUrl" in payment_data:
-        markup = types.InlineKeyboardMarkup()
-        payment_button = types.InlineKeyboardButton(
-            text="Оплатить подписку", 
-            url=payment_data["paymentUrl"]
-        )
-        markup.add(payment_button)
-        
-        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
-        bot.edit_message_text(
-            f"Для оплаты подписки на {period_text} нажмите на кнопку ниже:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-        
-        logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
-        
-        # Уведомляем администратора
-        admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
-                       f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
-                       f"<b>Период:</b> {period_text}\n" \
-                       f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
-        notify_admin(admin_message)
-    else:
+    except Exception as e:
+        logger.error(f"Ошибка при обработке callback оплаты: {str(e)}")
         bot.answer_callback_query(
             call.id,
-            "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
+            "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
-        logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
 
 @bot.message_handler(content_types=['text'])
 def text_handler(message):
