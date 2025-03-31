@@ -489,86 +489,85 @@ def calculate_days_left(timestamp, periodicity):
     
     return max(0, days_left)  # Возвращаем 0, если подписка уже закончилась
 
-# Обновляем функцию проверки подписок с дополнительным логированием
+# Обновляем функцию проверки подписок
 def check_subscription_expiration():
     try:
         logger.debug("Начало проверки сроков подписок")
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
         
-        # Получаем список всех пользователей с последними статусами их подписок
-        cursor.execute('''
-        WITH LastPayments AS (
-            SELECT 
-                buyer_email,
-                status,
-                timestamp,
-                event_type,
-                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
-            FROM payments
-        )
-        SELECT buyer_email, status, timestamp, event_type
-        FROM LastPayments
-        WHERE rn = 1
-        ''')
-        
-        users = cursor.fetchall()
-        logger.debug(f"Найдено {len(users)} пользователей для проверки")
-        conn.close()
-        
-        for user in users:
-            buyer_email, status, timestamp, event_type = user
-            user_id = buyer_email.split('@')[0]
-            logger.debug(f"Проверка пользователя {user_id}: статус={status}, тип={event_type}")
+        # Получаем список всех участников канала
+        try:
+            chat_members = bot.get_chat_members_count(CHANNEL_ID)
+            logger.debug(f"Всего участников в канале: {chat_members}")
             
-            try:
-                # Преобразуем user_id в int для сравнения
-                user_id_int = int(user_id)
-                # Преобразуем PRIVILEGED_USERS в int для корректного сравнения
-                privileged_ids = [int(uid.strip()) for uid in PRIVILEGED_USERS if uid.strip().isdigit()]
-                
-                logger.debug(f"Привилегированные пользователи: {privileged_ids}")
-                
-                # Пропускаем проверку для привилегированных пользователей
-                if user_id_int in privileged_ids:
-                    logger.debug(f"Пропуск проверки для привилегированного пользователя {user_id}")
-                    continue
-                
-                # Проверяем, является ли пользователь участником канала
-                chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
-                is_member = chat_member.status not in ['left', 'kicked']
-                logger.debug(f"Статус пользователя {user_id} в канале: {chat_member.status}")
-                
-                # Проверяем статус подписки
-                is_active = (
-                    status in ['subscription-active', 'active'] and
-                    event_type in ['payment.success', 'subscription.recurring.payment.success']
-                )
-                logger.debug(f"Подписка активна: {is_active}")
-                
-                # Если у пользователя нет активной подписки, но он в канале
-                if not is_active and is_member:
-                    logger.info(f"Удаление пользователя {user_id} из канала: подписка неактивна (статус: {status}, тип: {event_type})")
-                    result = remove_user_from_channel(int(user_id))
-                    logger.debug(f"Результат удаления пользователя {user_id}: {result}")
+            # Проверяем права бота
+            bot_member = bot.get_chat_member(CHANNEL_ID, bot.get_me().id)
+            if bot_member.status != 'administrator':
+                logger.error("Бот не является администратором канала")
+                return
+            
+            # Получаем всех участников канала
+            offset = 0
+            while offset < chat_members:
+                members = bot.get_chat_administrators(CHANNEL_ID)
+                for member in members:
+                    user_id = str(member.user.id)
                     
-                    if result:
-                        # Уведомляем администратора
-                        notify_admin(
-                            f"<b>Пользователь удален из канала</b>\n\n"
-                            f"<b>ID пользователя:</b> {user_id}\n"
-                            f"<b>Причина:</b> Неактивная подписка\n"
-                            f"<b>Статус:</b> {status}\n"
-                            f"<b>Тип события:</b> {event_type}\n"
-                            f"<b>Последнее обновление:</b> {timestamp}"
+                    try:
+                        # Пропускаем привилегированных пользователей
+                        if user_id in PRIVILEGED_USERS or member.status == 'creator':
+                            logger.debug(f"Пропуск привилегированного пользователя {user_id}")
+                            continue
+                        
+                        # Проверяем подписку в БД
+                        conn = sqlite3.connect(DB_PATH)
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                        WITH LastPayments AS (
+                            SELECT 
+                                buyer_email,
+                                status,
+                                timestamp,
+                                event_type,
+                                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+                            FROM payments
+                            WHERE buyer_email = ?
                         )
-                    else:
-                        logger.error(f"Не удалось удалить пользователя {user_id} из канала")
+                        SELECT status, timestamp, event_type
+                        FROM LastPayments
+                        WHERE rn = 1
+                        ''', (f"{user_id}@t.me",))
+                        
+                        payment = cursor.fetchone()
+                        conn.close()
+                        
+                        # Если нет записи в БД или подписка неактивна - удаляем из канала
+                        if not payment or (
+                            payment[0] not in ['subscription-active', 'active'] or
+                            payment[2] not in ['payment.success', 'subscription.recurring.payment.success']
+                        ):
+                            logger.info(f"Удаление пользователя {user_id} из канала: нет активной подписки")
+                            result = remove_user_from_channel(int(user_id))
+                            logger.debug(f"Результат удаления пользователя {user_id}: {result}")
+                            
+                            if result:
+                                notify_admin(
+                                    f"<b>Пользователь удален из канала</b>\n\n"
+                                    f"<b>ID пользователя:</b> {user_id}\n"
+                                    f"<b>Причина:</b> Нет активной подписки"
+                                )
+                            else:
+                                logger.error(f"Не удалось удалить пользователя {user_id} из канала")
+                        
+                    except Exception as e:
+                        logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
+                        continue
                 
-            except Exception as e:
-                logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
-                continue
+                offset += len(members)
                 
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка участников канала: {str(e)}", exc_info=True)
+            return
+            
     except Exception as e:
         logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
 
