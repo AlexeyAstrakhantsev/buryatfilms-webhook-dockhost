@@ -7,6 +7,7 @@ from telebot import types
 import threading
 import time
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Настройка логирования
 DATA_DIR = Path("/mount/database")
@@ -465,6 +466,100 @@ def subscribe_command(message):
             parse_mode="HTML"
         )
 
+# Добавляем функцию для расчета оставшихся дней подписки
+def calculate_days_left(timestamp, periodicity):
+    # Преобразуем строку в datetime
+    start_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    
+    # Определяем длительность периода в днях
+    period_days = {
+        "MONTHLY": 30,
+        "PERIOD_90_DAYS": 90,
+        "PERIOD_180_DAYS": 180,
+        "PERIOD_YEAR": 365
+    }
+    
+    days = period_days.get(periodicity, 30)  # По умолчанию 30 дней
+    end_date = start_date + timedelta(days=days)
+    
+    # Вычисляем оставшееся время
+    days_left = (end_date - datetime.now(end_date.tzinfo)).days
+    
+    return max(0, days_left)  # Возвращаем 0, если подписка уже закончилась
+
+# Обновляем функцию проверки подписок
+def check_subscription_expiration():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем список всех пользователей с последними статусами их подписок
+        cursor.execute('''
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                event_type,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+        )
+        SELECT buyer_email, status, timestamp, event_type
+        FROM LastPayments
+        WHERE rn = 1
+        ''')
+        
+        users = cursor.fetchall()
+        conn.close()
+        
+        for user in users:
+            buyer_email, status, timestamp, event_type = user
+            user_id = buyer_email.split('@')[0]  # Получаем ID пользователя из email
+            
+            try:
+                # Преобразуем user_id в int для сравнения
+                user_id_int = int(user_id)
+                # Преобразуем PRIVILEGED_USERS в int для корректного сравнения
+                privileged_ids = [int(uid.strip()) for uid in PRIVILEGED_USERS if uid.strip().isdigit()]
+                
+                # Пропускаем проверку для привилегированных пользователей
+                if user_id_int in privileged_ids:
+                    logger.debug(f"Пропуск проверки для привилегированного пользователя {user_id}")
+                    continue
+                
+                # Проверяем, является ли пользователь участником канала
+                chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
+                is_member = chat_member.status not in ['left', 'kicked']
+                
+                # Проверяем статус подписки
+                is_active = (
+                    status in ['subscription-active', 'active'] and
+                    event_type in ['payment.success', 'subscription.recurring.payment.success']
+                )
+                
+                # Если у пользователя нет активной подписки, но он в канале
+                if not is_active and is_member:
+                    logger.info(f"Удаление пользователя {user_id} из канала: подписка неактивна (статус: {status}, тип: {event_type})")
+                    remove_user_from_channel(int(user_id))  # Преобразуем user_id в int
+                    
+                    # Уведомляем администратора
+                    notify_admin(
+                        f"<b>Пользователь удален из канала</b>\n\n"
+                        f"<b>ID пользователя:</b> {user_id}\n"
+                        f"<b>Причина:</b> Неактивная подписка\n"
+                        f"<b>Статус:</b> {status}\n"
+                        f"<b>Тип события:</b> {event_type}\n"
+                        f"<b>Последнее обновление:</b> {timestamp}"
+                    )
+                
+            except Exception as e:
+                logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
+                continue
+                
+    except Exception as e:
+        logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
+
+# Обновляем функцию status_command
 @bot.message_handler(commands=['status'])
 def status_command(message):
     user_id = message.from_user.id
@@ -477,6 +572,31 @@ def status_command(message):
     if subscription["status"] == "active":
         data = subscription["data"]
         
+        # Получаем информацию о периодичности подписки
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT event_type, raw_data
+        FROM payments
+        WHERE buyer_email = ? AND contract_id = ?
+        ''', (f"{user_id}@t.me", data[5]))
+        payment_info = cursor.fetchone()
+        conn.close()
+        
+        # Пытаемся получить периодичность из raw_data
+        periodicity = "MONTHLY"  # значение по умолчанию
+        if payment_info and payment_info[1]:
+            try:
+                import json
+                raw_data = json.loads(payment_info[1])
+                if 'periodicity' in raw_data:
+                    periodicity = raw_data['periodicity']
+            except:
+                pass
+        
+        # Вычисляем оставшиеся дни
+        days_left = calculate_days_left(data[9], periodicity)
+        
         # Создаем кнопку для отмены подписки
         markup = types.InlineKeyboardMarkup()
         cancel_button = types.InlineKeyboardButton(
@@ -485,12 +605,16 @@ def status_command(message):
         )
         markup.add(cancel_button)
         
+        # Формируем сообщение с информацией о днях
+        days_text = f"\nДо окончания подписки осталось: {days_left} дней"
+        
         bot.send_message(
             message.chat.id,
-            f"У вас есть активная подписка!\n"
+            f"Ваша подписка активна!\n"
             f"Продукт: {data[3]}\n"
             f"Дата активации: {data[9]}\n"
-            f"Сумма: {data[7]} {data[8]}",
+            f"Сумма: {data[7]} {data[8]}"
+            f"{days_text}",
             reply_markup=markup
         )
     elif subscription["status"] == "failed":
@@ -768,65 +892,6 @@ def check_payments_periodically():
         time.sleep(60)
 
 # Обновляем функцию проверки подписок
-def check_subscription_expiration():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Получаем список всех пользователей с последними статусами их подписок
-        cursor.execute('''
-        WITH LastPayments AS (
-            SELECT 
-                buyer_email,
-                status,
-                timestamp,
-                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
-            FROM payments
-        )
-        SELECT buyer_email, status, timestamp
-        FROM LastPayments
-        WHERE rn = 1
-        ''')
-        
-        users = cursor.fetchall()
-        conn.close()
-        
-        for user in users:
-            buyer_email, status, timestamp = user
-            user_id = buyer_email.split('@')[0]  # Получаем ID пользователя из email
-            
-            # Пропускаем проверку для привилегированных пользователей
-            if user_id in PRIVILEGED_USERS:
-                logger.debug(f"Пропуск проверки для привилегированного пользователя {user_id}")
-                continue
-            
-            try:
-                # Проверяем, является ли пользователь участником канала
-                chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
-                is_member = chat_member.status not in ['left', 'kicked']
-                
-                # Если у пользователя нет активной подписки, но он в канале
-                if status not in ['subscription-active', 'active'] and is_member:
-                    logger.info(f"Удаление пользователя {user_id} из канала: подписка неактивна")
-                    remove_user_from_channel(user_id)
-                    
-                    # Уведомляем администратора
-                    notify_admin(
-                        f"<b>Пользователь удален из канала</b>\n\n"
-                        f"<b>ID пользователя:</b> {user_id}\n"
-                        f"<b>Причина:</b> Неактивная подписка\n"
-                        f"<b>Статус:</b> {status}\n"
-                        f"<b>Последнее обновление:</b> {timestamp}"
-                    )
-                
-            except Exception as e:
-                logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"Ошибка при проверке сроков подписок: {str(e)}")
-
-# Функция для периодической проверки подписок
 def check_subscriptions_periodically():
     while True:
         try:
