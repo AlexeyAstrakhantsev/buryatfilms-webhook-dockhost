@@ -26,16 +26,67 @@ logger = logging.getLogger("payment_bot")
 # Получение настроек из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 LAVA_API_KEY = os.getenv("LAVA_API_KEY")
-LAVA_OFFER_ID = os.getenv("LAVA_OFFER_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # ID закрытого канала
-ADMIN_ID = os.getenv("ADMIN_ID")  # ID администратора для уведомлений
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
+
+# Добавляем словарь для перевода периодов
+PERIOD_TRANSLATIONS = {
+    "MONTHLY": "1 месяц",
+    "PERIOD_90_DAYS": "3 месяца",
+    "PERIOD_180_DAYS": "6 месяцев",
+    "PERIOD_YEAR": "1 год"
+}
 
 # Инициализация бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Функция для создания ссылки на оплату
-def create_payment_link(user_id):
+# Функция для получения списка доступных подписок
+def get_available_subscriptions():
+    url = "https://gate.lava.top/api/v2/products"
+    params = {
+        "contentCategories": "PRODUCT",
+        "feedVisibility": "ONLY_VISIBLE",
+        "showAllSubscriptionPeriods": "true"
+    }
+    headers = {
+        "X-Api-Key": LAVA_API_KEY
+    }
+    
+    try:
+        response = requests.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        
+        subscriptions = []
+        for item in data.get("items", []):
+            if item.get("type") == "SUBSCRIPTION":
+                for offer in item.get("offers", []):
+                    # Фильтруем цены только в рублях
+                    rub_prices = [
+                        {
+                            "amount": price["amount"],
+                            "periodicity": price["periodicity"]
+                        }
+                        for price in offer["prices"]
+                        if price["currency"] == "RUB"
+                    ]
+                    
+                    if rub_prices:
+                        subscriptions.append({
+                            "offer_id": offer["id"],
+                            "name": offer["name"],
+                            "description": offer["description"],
+                            "prices": rub_prices
+                        })
+        
+        return subscriptions
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка подписок: {str(e)}")
+        return None
+
+# Функция для создания ссылки на оплату с учетом периода
+def create_payment_link(user_id, offer_id, periodicity):
     url = "https://gate.lava.top/api/v2/invoice"
     headers = {
         "Content-Type": "application/json",
@@ -43,8 +94,8 @@ def create_payment_link(user_id):
     }
     payload = {
         "email": f"{user_id}@t.me",
-        "offerId": LAVA_OFFER_ID,
-        "periodicity": "MONTHLY",
+        "offerId": offer_id,
+        "periodicity": periodicity,
         "currency": "RUB",
         "buyerLanguage": "RU",
         "paymentMethod": "BANK131",
@@ -351,11 +402,6 @@ def subscribe_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
     
-    # Уведомляем администратора о попытке оформления подписки
-    admin_message = f"<b>Попытка оформления подписки</b>\n\n" \
-                   f"<b>Пользователь:</b> {username} (ID: {user_id})"
-    notify_admin(admin_message)
-    
     # Проверяем, есть ли уже активная подписка
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
@@ -363,44 +409,41 @@ def subscribe_command(message):
             message.chat.id,
             "У вас уже есть активная подписка!"
         )
-        
-        # Уведомляем администратора
-        notify_admin(f"<b>Информация:</b> У пользователя {username} (ID: {user_id}) уже есть активная подписка")
         return
     
-    # Создаем ссылку на оплату
-    payment_data = create_payment_link(user_id)
+    # Получаем список доступных подписок
+    subscriptions = get_available_subscriptions()
+    if not subscriptions:
+        bot.send_message(
+            message.chat.id,
+            "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже."
+        )
+        return
     
-    if payment_data and "paymentUrl" in payment_data:
-        markup = types.InlineKeyboardMarkup()
-        payment_button = types.InlineKeyboardButton(
-            text="Оплатить подписку", 
-            url=payment_data["paymentUrl"]
-        )
-        markup.add(payment_button)
+    # Для каждой подписки создаем отдельное сообщение с кнопками периодов
+    for sub in subscriptions:
+        markup = types.InlineKeyboardMarkup(row_width=2)
         
+        # Создаем кнопки для каждого периода
+        period_buttons = []
+        for price in sub["prices"]:
+            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
+            button_text = f"{period_text} - {price['amount']} руб."
+            callback_data = f"pay_{sub['offer_id']}_{price['periodicity']}"
+            period_buttons.append(
+                types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
+            )
+        
+        markup.add(*period_buttons)
+        
+        # Отправляем информацию о подписке с кнопками выбора периода
+        message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
         bot.send_message(
             message.chat.id,
-            "Для оформления подписки нажмите на кнопку ниже:",
-            reply_markup=markup
+            message_text,
+            reply_markup=markup,
+            parse_mode="HTML"
         )
-        
-        logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
-        
-        # Уведомляем администратора
-        admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
-                       f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
-                       f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
-        notify_admin(admin_message)
-    else:
-        bot.send_message(
-            message.chat.id,
-            "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
-        )
-        logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
-        
-        # Уведомляем администратора об ошибке
-        notify_admin(f"<b>ОШИБКА:</b> Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
 
 @bot.message_handler(commands=['status'])
 def status_command(message):
@@ -491,6 +534,48 @@ def cancel_subscription_callback(call):
         
         # Уведомляем администратора об ошибке
         notify_admin(f"<b>ОШИБКА:</b> Не удалось отменить подписку для пользователя {username} (ID: {user_id}), контракт {contract_id}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
+def process_payment_callback(call):
+    user_id = call.from_user.id
+    username = call.from_user.username or f"user_{user_id}"
+    
+    # Разбираем данные из callback
+    _, offer_id, periodicity = call.data.split('_')
+    
+    # Создаем ссылку на оплату
+    payment_data = create_payment_link(user_id, offer_id, periodicity)
+    
+    if payment_data and "paymentUrl" in payment_data:
+        markup = types.InlineKeyboardMarkup()
+        payment_button = types.InlineKeyboardButton(
+            text="Оплатить подписку", 
+            url=payment_data["paymentUrl"]
+        )
+        markup.add(payment_button)
+        
+        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+        bot.edit_message_text(
+            f"Для оплаты подписки на {period_text} нажмите на кнопку ниже:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        
+        logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
+        
+        # Уведомляем администратора
+        admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
+                       f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
+                       f"<b>Период:</b> {period_text}\n" \
+                       f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
+        notify_admin(admin_message)
+    else:
+        bot.answer_callback_query(
+            call.id,
+            "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
+        )
+        logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
 
 @bot.message_handler(content_types=['text'])
 def text_handler(message):
