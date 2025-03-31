@@ -219,9 +219,53 @@ def add_user_to_channel(user_id):
         # Создаем ссылку-приглашение в канал
         invite_link = bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            member_limit=1,  # Ограничение на одного пользователя
-            expire_date=int(time.time()) + 86400  # Срок действия 24 часа
+            member_limit=1,
+            expire_date=int(time.time()) + 86400
         )
+        
+        # Получаем информацию о последнем платеже
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT id, timestamp, raw_data
+        FROM payments 
+        WHERE buyer_email = ? 
+        AND (status = 'subscription-active' OR status = 'active')
+        ORDER BY timestamp DESC
+        LIMIT 1
+        ''', (f"{user_id}@t.me",))
+        
+        payment = cursor.fetchone()
+        if payment:
+            payment_id, timestamp, raw_data = payment
+            
+            # Определяем дату окончания подписки
+            try:
+                import json
+                raw_data = json.loads(raw_data)
+                periodicity = raw_data.get('periodicity', 'MONTHLY')
+                days = {
+                    "MONTHLY": 30,
+                    "PERIOD_90_DAYS": 90,
+                    "PERIOD_180_DAYS": 180,
+                    "PERIOD_YEAR": 365
+                }.get(periodicity, 30)
+                
+                end_date = (datetime.fromisoformat(timestamp.replace('Z', '+00:00')) + 
+                           timedelta(days=days)).isoformat()
+            except:
+                end_date = None
+            
+            # Добавляем или обновляем запись в channel_members
+            cursor.execute('''
+            INSERT OR REPLACE INTO channel_members 
+            (user_id, status, subscription_end_date, last_payment_id)
+            VALUES (?, 'active', ?, ?)
+            ''', (user_id, end_date, payment_id))
+            
+            conn.commit()
+        
+        conn.close()
         
         # Отправляем пользователю ссылку на канал
         bot.send_message(
@@ -232,6 +276,7 @@ def add_user_to_channel(user_id):
         
         logger.info(f"Пользователь {user_id} добавлен в закрытый канал")
         return True
+        
     except Exception as e:
         logger.error(f"Ошибка при добавлении пользователя {user_id} в канал: {str(e)}")
         return False
@@ -353,48 +398,45 @@ def check_new_payments():
     
     conn.close()
 
-# Обновляем структуру базы данных для отслеживания обработанных платежей
+# Обновляем функцию update_db_structure
 def update_db_structure():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Проверяем, существует ли таблица payments
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
-    table_exists = cursor.fetchone()
+    # Создаем таблицу для платежей, если её нет
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_title TEXT NOT NULL,
+        buyer_email TEXT NOT NULL,
+        contract_id TEXT NOT NULL,
+        parent_contract_id TEXT,
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_message TEXT,
+        raw_data TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        processed INTEGER DEFAULT 0
+    )
+    ''')
     
-    if not table_exists:
-        # Таблица не существует, создаем её
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            product_title TEXT NOT NULL,
-            buyer_email TEXT NOT NULL,
-            contract_id TEXT NOT NULL,
-            parent_contract_id TEXT,
-            amount REAL NOT NULL,
-            currency TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            status TEXT NOT NULL,
-            error_message TEXT,
-            raw_data TEXT NOT NULL,
-            received_at TEXT NOT NULL,
-            processed INTEGER DEFAULT 0
-        )
-        ''')
-        conn.commit()
-        logger.info("Создана таблица payments в базе данных")
-    else:
-        # Таблица существует, проверяем наличие колонки processed
-        cursor.execute("PRAGMA table_info(payments)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        if "processed" not in columns:
-            cursor.execute("ALTER TABLE payments ADD COLUMN processed INTEGER DEFAULT 0")
-            conn.commit()
-            logger.info("Структура базы данных обновлена: добавлена колонка processed")
+    # Создаем таблицу для участников канала
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS channel_members (
+        user_id INTEGER PRIMARY KEY,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        subscription_end_date TIMESTAMP,
+        last_payment_id INTEGER,
+        FOREIGN KEY (last_payment_id) REFERENCES payments(id)
+    )
+    ''')
     
+    conn.commit()
     conn.close()
 
 # Обработчики команд
@@ -494,96 +536,85 @@ def check_subscription_expiration():
     try:
         logger.debug("Начало проверки сроков подписок")
         
-        # Получаем список всех участников канала
-        try:
-            # Проверяем права бота
-            bot_member = bot.get_chat_member(CHANNEL_ID, bot.get_me().id)
-            if bot_member.status != 'administrator':
-                logger.error("Бот не является администратором канала")
-                return
+        # Получаем всех активных пользователей канала
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем пользователей с активным статусом и истекшей подпиской
+        cursor.execute('''
+        SELECT 
+            cm.user_id,
+            cm.subscription_end_date,
+            p.status,
+            p.event_type
+        FROM channel_members cm
+        LEFT JOIN payments p ON p.id = cm.last_payment_id
+        WHERE cm.status = 'active'
+        AND (
+            cm.subscription_end_date < datetime('now')
+            OR p.status NOT IN ('subscription-active', 'active')
+            OR p.event_type NOT IN ('payment.success', 'subscription.recurring.payment.success')
+        )
+        ''')
+        
+        expired_members = cursor.fetchall()
+        logger.debug(f"Найдено {len(expired_members)} пользователей с истекшей подпиской")
+        
+        for member in expired_members:
+            user_id = member[0]
+            end_date = member[1]
+            payment_status = member[2]
+            event_type = member[3]
             
-            # Получаем количество участников
-            members_count = bot.get_chat_member_count(CHANNEL_ID)
-            logger.debug(f"Всего участников в канале: {members_count}")
-            
-            # Получаем список администраторов
-            admins = bot.get_chat_administrators(CHANNEL_ID)
-            admin_ids = [str(admin.user.id) for admin in admins]
-            logger.debug(f"Администраторы канала: {admin_ids}")
-            
-            # Получаем всех участников через get_chat_member
-            for user_id in range(1, 10000000000):  # Проходим по возможным ID пользователей
-                try:
-                    member = bot.get_chat_member(CHANNEL_ID, user_id)
-                    if member.status not in ['left', 'kicked']:  # Если пользователь в канале
-                        user_id_str = str(user_id)
-                        logger.debug(f"Найден участник канала: {user_id_str} (статус: {member.status})")
-                        
-                        # Пропускаем привилегированных пользователей и администраторов
-                        if (user_id_str in PRIVILEGED_USERS or 
-                            user_id_str in admin_ids or 
-                            member.status in ['creator', 'administrator']):
-                            logger.debug(f"Пропуск привилегированного пользователя {user_id_str}")
-                            continue
-                        
-                        # Проверяем подписку в БД
-                        conn = sqlite3.connect(DB_PATH)
-                        cursor = conn.cursor()
+            try:
+                # Проверяем, является ли пользователь участником канала
+                chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
+                if chat_member.status not in ['left', 'kicked']:
+                    logger.info(
+                        f"Удаление пользователя {user_id} из канала: "
+                        f"подписка истекла {end_date}, "
+                        f"статус платежа: {payment_status}, "
+                        f"тип события: {event_type}"
+                    )
+                    
+                    # Удаляем пользователя из канала
+                    result = remove_user_from_channel(user_id)
+                    
+                    if result:
+                        # Обновляем статус в БД
                         cursor.execute('''
-                        WITH LastPayments AS (
-                            SELECT 
-                                buyer_email,
-                                status,
-                                timestamp,
-                                event_type,
-                                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
-                            FROM payments
-                            WHERE buyer_email = ?
+                        UPDATE channel_members 
+                        SET status = 'removed' 
+                        WHERE user_id = ?
+                        ''', (user_id,))
+                        
+                        # Уведомляем пользователя
+                        try:
+                            bot.send_message(
+                                user_id,
+                                "Ваша подписка истекла. Доступ к каналу прекращен.\n"
+                                "Для возобновления доступа используйте команду /subscribe"
+                            )
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить уведомление пользователю {user_id}: {str(e)}")
+                        
+                        # Уведомляем администратора
+                        notify_admin(
+                            f"<b>Пользователь удален из канала</b>\n\n"
+                            f"<b>ID пользователя:</b> {user_id}\n"
+                            f"<b>Причина:</b> Истекла подписка\n"
+                            f"<b>Дата окончания:</b> {end_date}"
                         )
-                        SELECT status, timestamp, event_type
-                        FROM LastPayments
-                        WHERE rn = 1
-                        ''', (f"{user_id_str}@t.me",))
-                        
-                        payment = cursor.fetchone()
-                        conn.close()
-                        
-                        # Если нет записи в БД или подписка неактивна - удаляем из канала
-                        if not payment or (
-                            payment[0] not in ['subscription-active', 'active'] or
-                            payment[2] not in ['payment.success', 'subscription.recurring.payment.success']
-                        ):
-                            logger.info(f"Удаление пользователя {user_id_str} из канала: нет активной подписки")
-                            result = remove_user_from_channel(user_id)
-                            logger.debug(f"Результат удаления пользователя {user_id_str}: {result}")
-                            
-                            if result:
-                                notify_admin(
-                                    f"<b>Пользователь удален из канала</b>\n\n"
-                                    f"<b>ID пользователя:</b> {user_id_str}\n"
-                                    f"<b>Причина:</b> Нет активной подписки"
-                                )
-                            else:
-                                logger.error(f"Не удалось удалить пользователя {user_id_str} из канала")
-                
-                except telebot.apihelper.ApiTelegramException as e:
-                    if e.error_code == 400 and "user not found" in e.description.lower():
-                        continue  # Пропускаем несуществующие ID
-                    elif e.error_code == 429:  # Too Many Requests
-                        logger.warning("Достигнут лимит запросов к API. Ждем 60 секунд...")
-                        time.sleep(60)
-                        continue
                     else:
-                        logger.error(f"Ошибка API Telegram: {e}")
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
-                    continue
-            
-        except Exception as e:
-            logger.error(f"Ошибка при получении списка участников канала: {str(e)}", exc_info=True)
-            return
+                        logger.error(f"Не удалось удалить пользователя {user_id} из канала")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
+                continue
+        
+        conn.commit()
+        conn.close()
+        logger.info("Проверка участников канала завершена")
             
     except Exception as e:
         logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
