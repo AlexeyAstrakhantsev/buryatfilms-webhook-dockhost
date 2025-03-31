@@ -502,20 +502,28 @@ def check_subscription_expiration():
                 logger.error("Бот не является администратором канала")
                 return
             
-            # Получаем всех участников канала
-            try:
-                members = bot.get_chat_members(CHANNEL_ID)
-                logger.debug(f"Получен список участников канала: {len(members)} пользователей")
-                
-                for member in members:
-                    user_id = str(member.user.id)
-                    logger.debug(f"Проверка пользователя {user_id} (статус: {member.status})")
-                    
-                    try:
+            # Получаем количество участников
+            members_count = bot.get_chat_member_count(CHANNEL_ID)
+            logger.debug(f"Всего участников в канале: {members_count}")
+            
+            # Получаем список администраторов
+            admins = bot.get_chat_administrators(CHANNEL_ID)
+            admin_ids = [str(admin.user.id) for admin in admins]
+            logger.debug(f"Администраторы канала: {admin_ids}")
+            
+            # Получаем всех участников через get_chat_member
+            for user_id in range(1, 10000000000):  # Проходим по возможным ID пользователей
+                try:
+                    member = bot.get_chat_member(CHANNEL_ID, user_id)
+                    if member.status not in ['left', 'kicked']:  # Если пользователь в канале
+                        user_id_str = str(user_id)
+                        logger.debug(f"Найден участник канала: {user_id_str} (статус: {member.status})")
+                        
                         # Пропускаем привилегированных пользователей и администраторов
-                        if (user_id in PRIVILEGED_USERS or 
+                        if (user_id_str in PRIVILEGED_USERS or 
+                            user_id_str in admin_ids or 
                             member.status in ['creator', 'administrator']):
-                            logger.debug(f"Пропуск привилегированного пользователя {user_id}")
+                            logger.debug(f"Пропуск привилегированного пользователя {user_id_str}")
                             continue
                         
                         # Проверяем подписку в БД
@@ -535,7 +543,7 @@ def check_subscription_expiration():
                         SELECT status, timestamp, event_type
                         FROM LastPayments
                         WHERE rn = 1
-                        ''', (f"{user_id}@t.me",))
+                        ''', (f"{user_id_str}@t.me",))
                         
                         payment = cursor.fetchone()
                         conn.close()
@@ -545,27 +553,34 @@ def check_subscription_expiration():
                             payment[0] not in ['subscription-active', 'active'] or
                             payment[2] not in ['payment.success', 'subscription.recurring.payment.success']
                         ):
-                            logger.info(f"Удаление пользователя {user_id} из канала: нет активной подписки")
-                            result = remove_user_from_channel(int(user_id))
-                            logger.debug(f"Результат удаления пользователя {user_id}: {result}")
+                            logger.info(f"Удаление пользователя {user_id_str} из канала: нет активной подписки")
+                            result = remove_user_from_channel(user_id)
+                            logger.debug(f"Результат удаления пользователя {user_id_str}: {result}")
                             
                             if result:
                                 notify_admin(
                                     f"<b>Пользователь удален из канала</b>\n\n"
-                                    f"<b>ID пользователя:</b> {user_id}\n"
+                                    f"<b>ID пользователя:</b> {user_id_str}\n"
                                     f"<b>Причина:</b> Нет активной подписки"
                                 )
                             else:
-                                logger.error(f"Не удалось удалить пользователя {user_id} из канала")
-                        
-                    except Exception as e:
-                        logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
+                                logger.error(f"Не удалось удалить пользователя {user_id_str} из канала")
+                
+                except telebot.apihelper.ApiTelegramException as e:
+                    if e.error_code == 400 and "user not found" in e.description.lower():
+                        continue  # Пропускаем несуществующие ID
+                    elif e.error_code == 429:  # Too Many Requests
+                        logger.warning("Достигнут лимит запросов к API. Ждем 60 секунд...")
+                        time.sleep(60)
                         continue
-                
-            except Exception as e:
-                logger.error(f"Ошибка при получении списка участников: {str(e)}", exc_info=True)
-                return
-                
+                    else:
+                        logger.error(f"Ошибка API Telegram: {e}")
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
+                    continue
+            
         except Exception as e:
             logger.error(f"Ошибка при получении списка участников канала: {str(e)}", exc_info=True)
             return
