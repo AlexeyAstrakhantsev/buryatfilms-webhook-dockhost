@@ -236,31 +236,33 @@ def add_user_to_channel(user_id):
         logger.error(f"Ошибка при добавлении пользователя {user_id} в канал: {str(e)}")
         return False
 
-# Функция для удаления пользователя из закрытого канала
+# Обновляем функцию remove_user_from_channel
 def remove_user_from_channel(user_id):
     try:
-        # Пытаемся удалить пользователя из канала
-        bot.ban_chat_member(
-            chat_id=CHANNEL_ID,
-            user_id=user_id
-        )
+        logger.debug(f"Попытка удаления пользователя {user_id} из канала {CHANNEL_ID}")
         
-        # Сразу разбаниваем, чтобы пользователь мог вернуться при повторной подписке
-        bot.unban_chat_member(
-            chat_id=CHANNEL_ID,
-            user_id=user_id,
-            only_if_banned=True
-        )
+        # Проверяем права бота в канале
+        bot_member = bot.get_chat_member(CHANNEL_ID, bot.get_me().id)
+        logger.debug(f"Права бота в канале: {bot_member.status}")
+        if bot_member.status != 'administrator':
+            logger.error(f"Бот не является администратором канала {CHANNEL_ID}")
+            return False
         
-        bot.send_message(
-            user_id,
-            "Ваша подписка отменена. Доступ к закрытому каналу прекращен."
-        )
+        # Проверяем текущий статус пользователя
+        current_status = bot.get_chat_member(CHANNEL_ID, user_id)
+        logger.debug(f"Текущий статус пользователя {user_id} в канале: {current_status.status}")
         
-        logger.info(f"Пользователь {user_id} удален из закрытого канала")
-        return True
+        # Пытаемся удалить пользователя
+        result = bot.ban_chat_member(CHANNEL_ID, user_id)
+        logger.debug(f"Результат удаления пользователя: {result}")
+        
+        # Сразу разбаниваем, чтобы пользователь мог вернуться после оплаты
+        bot.unban_chat_member(CHANNEL_ID, user_id)
+        logger.debug(f"Пользователь разбанен для возможности повторного входа")
+        
+        return result
     except Exception as e:
-        logger.error(f"Ошибка при удалении пользователя {user_id} из канала: {str(e)}")
+        logger.error(f"Ошибка при удалении пользователя {user_id} из канала: {str(e)}", exc_info=True)
         return False
 
 # Функция для отправки уведомления администратору
@@ -487,9 +489,10 @@ def calculate_days_left(timestamp, periodicity):
     
     return max(0, days_left)  # Возвращаем 0, если подписка уже закончилась
 
-# Обновляем функцию проверки подписок
+# Обновляем функцию проверки подписок с дополнительным логированием
 def check_subscription_expiration():
     try:
+        logger.debug("Начало проверки сроков подписок")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -510,17 +513,21 @@ def check_subscription_expiration():
         ''')
         
         users = cursor.fetchall()
+        logger.debug(f"Найдено {len(users)} пользователей для проверки")
         conn.close()
         
         for user in users:
             buyer_email, status, timestamp, event_type = user
-            user_id = buyer_email.split('@')[0]  # Получаем ID пользователя из email
+            user_id = buyer_email.split('@')[0]
+            logger.debug(f"Проверка пользователя {user_id}: статус={status}, тип={event_type}")
             
             try:
                 # Преобразуем user_id в int для сравнения
                 user_id_int = int(user_id)
                 # Преобразуем PRIVILEGED_USERS в int для корректного сравнения
                 privileged_ids = [int(uid.strip()) for uid in PRIVILEGED_USERS if uid.strip().isdigit()]
+                
+                logger.debug(f"Привилегированные пользователи: {privileged_ids}")
                 
                 # Пропускаем проверку для привилегированных пользователей
                 if user_id_int in privileged_ids:
@@ -530,27 +537,33 @@ def check_subscription_expiration():
                 # Проверяем, является ли пользователь участником канала
                 chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
                 is_member = chat_member.status not in ['left', 'kicked']
+                logger.debug(f"Статус пользователя {user_id} в канале: {chat_member.status}")
                 
                 # Проверяем статус подписки
                 is_active = (
                     status in ['subscription-active', 'active'] and
                     event_type in ['payment.success', 'subscription.recurring.payment.success']
                 )
+                logger.debug(f"Подписка активна: {is_active}")
                 
                 # Если у пользователя нет активной подписки, но он в канале
                 if not is_active and is_member:
                     logger.info(f"Удаление пользователя {user_id} из канала: подписка неактивна (статус: {status}, тип: {event_type})")
-                    remove_user_from_channel(int(user_id))  # Преобразуем user_id в int
+                    result = remove_user_from_channel(int(user_id))
+                    logger.debug(f"Результат удаления пользователя {user_id}: {result}")
                     
-                    # Уведомляем администратора
-                    notify_admin(
-                        f"<b>Пользователь удален из канала</b>\n\n"
-                        f"<b>ID пользователя:</b> {user_id}\n"
-                        f"<b>Причина:</b> Неактивная подписка\n"
-                        f"<b>Статус:</b> {status}\n"
-                        f"<b>Тип события:</b> {event_type}\n"
-                        f"<b>Последнее обновление:</b> {timestamp}"
-                    )
+                    if result:
+                        # Уведомляем администратора
+                        notify_admin(
+                            f"<b>Пользователь удален из канала</b>\n\n"
+                            f"<b>ID пользователя:</b> {user_id}\n"
+                            f"<b>Причина:</b> Неактивная подписка\n"
+                            f"<b>Статус:</b> {status}\n"
+                            f"<b>Тип события:</b> {event_type}\n"
+                            f"<b>Последнее обновление:</b> {timestamp}"
+                        )
+                    else:
+                        logger.error(f"Не удалось удалить пользователя {user_id} из канала")
                 
             except Exception as e:
                 logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
