@@ -7,7 +7,7 @@ from telebot import types
 import threading
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 # Настройка логирования
@@ -50,6 +50,10 @@ CURRENCY_TRANSLATIONS = {
     "USD": "$",
     "EUR": "€"
 }
+
+# Добавляем константы для настройки уведомлений
+GRACE_PERIOD_DAYS = 3  # Дней отсрочки после окончания подписки
+NOTIFY_BEFORE_DAYS = [7, 3, 1]  # За сколько дней уведомлять об окончании подписки
 
 # Инициализация бота
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -541,7 +545,7 @@ def check_subscription_expiration():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Получаем пользователей с активным статусом и истекшей подпиской
+        # Получаем пользователей с активным статусом
         cursor.execute('''
         SELECT 
             cm.user_id,
@@ -551,64 +555,82 @@ def check_subscription_expiration():
         FROM channel_members cm
         LEFT JOIN payments p ON p.id = cm.last_payment_id
         WHERE cm.status = 'active'
-        AND (
-            cm.subscription_end_date < datetime('now')
-            OR p.status NOT IN ('subscription-active', 'active')
-            OR p.event_type NOT IN ('payment.success', 'subscription.recurring.payment.success')
-        )
         ''')
         
-        expired_members = cursor.fetchall()
-        logger.debug(f"Найдено {len(expired_members)} пользователей с истекшей подпиской")
+        active_members = cursor.fetchall()
+        logger.debug(f"Найдено {len(active_members)} активных пользователей")
         
-        for member in expired_members:
+        current_time = datetime.now(timezone.utc)
+        
+        for member in active_members:
             user_id = member[0]
-            end_date = member[1]
+            end_date = datetime.fromisoformat(member[1].replace('Z', '+00:00'))
             payment_status = member[2]
             event_type = member[3]
+            
+            # Вычисляем оставшиеся дни
+            days_left = (end_date - current_time).days
             
             try:
                 # Проверяем, является ли пользователь участником канала
                 chat_member = bot.get_chat_member(CHANNEL_ID, user_id)
                 if chat_member.status not in ['left', 'kicked']:
-                    logger.info(
-                        f"Удаление пользователя {user_id} из канала: "
-                        f"подписка истекла {end_date}, "
-                        f"статус платежа: {payment_status}, "
-                        f"тип события: {event_type}"
-                    )
                     
-                    # Удаляем пользователя из канала
-                    result = remove_user_from_channel(user_id)
-                    
-                    if result:
-                        # Обновляем статус в БД
-                        cursor.execute('''
-                        UPDATE channel_members 
-                        SET status = 'removed' 
-                        WHERE user_id = ?
-                        ''', (user_id,))
+                    # Если подписка истекла и закончился льготный период
+                    if days_left < -GRACE_PERIOD_DAYS:
+                        logger.info(
+                            f"Удаление пользователя {user_id} из канала: "
+                            f"подписка истекла {member[1]}, "
+                            f"прошло дней после окончания: {-days_left}"
+                        )
                         
-                        # Уведомляем пользователя
-                        try:
+                        # Удаляем пользователя из канала
+                        result = remove_user_from_channel(user_id)
+                        
+                        if result:
+                            # Обновляем статус в БД
+                            cursor.execute('''
+                            UPDATE channel_members 
+                            SET status = 'removed' 
+                            WHERE user_id = ?
+                            ''', (user_id,))
+                            
+                            # Уведомляем пользователя
                             bot.send_message(
                                 user_id,
-                                "Ваша подписка истекла. Доступ к каналу прекращен.\n"
+                                "❌ Ваша подписка истекла, и льготный период подошел к концу.\n"
+                                "Доступ к каналу прекращен.\n"
                                 "Для возобновления доступа используйте команду /subscribe"
                             )
-                        except Exception as e:
-                            logger.error(f"Не удалось отправить уведомление пользователю {user_id}: {str(e)}")
-                        
-                        # Уведомляем администратора
-                        notify_admin(
-                            f"<b>Пользователь удален из канала</b>\n\n"
-                            f"<b>ID пользователя:</b> {user_id}\n"
-                            f"<b>Причина:</b> Истекла подписка\n"
-                            f"<b>Дата окончания:</b> {end_date}"
+                            
+                            # Уведомляем администратора
+                            notify_admin(
+                                f"<b>Пользователь удален из канала</b>\n\n"
+                                f"<b>ID пользователя:</b> {user_id}\n"
+                                f"<b>Причина:</b> Истекла подписка и льготный период\n"
+                                f"<b>Дата окончания:</b> {member[1]}"
+                            )
+                    
+                    # Если подписка истекла, но еще действует льготный период
+                    elif days_left < 0:
+                        days_grace_left = GRACE_PERIOD_DAYS + days_left
+                        bot.send_message(
+                            user_id,
+                            f"⚠️ Ваша подписка истекла!\n\n"
+                            f"У вас есть еще {days_grace_left} дней льготного периода.\n"
+                            f"После этого доступ к каналу будет прекращен.\n\n"
+                            f"Для продления подписки используйте команду /subscribe"
                         )
-                    else:
-                        logger.error(f"Не удалось удалить пользователя {user_id} из канала")
-                
+                    
+                    # Уведомления о скором окончании подписки
+                    elif days_left in NOTIFY_BEFORE_DAYS:
+                        bot.send_message(
+                            user_id,
+                            f"ℹ️ Ваша подписка закончится через {days_left} дней.\n"
+                            f"Не забудьте продлить её, чтобы сохранить доступ к каналу.\n\n"
+                            f"Для продления используйте команду /subscribe"
+                        )
+            
             except Exception as e:
                 logger.error(f"Ошибка при проверке пользователя {user_id}: {str(e)}", exc_info=True)
                 continue
