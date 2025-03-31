@@ -32,6 +32,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя пользователя техподдержки в Telegram
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылка на канал
 
 # Список привилегированных пользователей (всегда имеют доступ к каналу)
 PRIVILEGED_USERS = os.getenv("PRIVILEGED_USERS", "").split(",")  # ID через запятую в переменной окружения
@@ -177,47 +178,47 @@ def cancel_subscription(user_id, parent_contract_id):
 
 # Функция для проверки статуса подписки пользователя
 def check_subscription_status(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Ищем активные подписки пользователя
-    cursor.execute('''
-    SELECT * FROM payments 
-    WHERE buyer_email = ? 
-    AND (status = 'subscription-active' OR status = 'active')
-    ORDER BY timestamp DESC
-    LIMIT 1
-    ''', (f"{user_id}@t.me",))
-    
-    active_subscription = cursor.fetchone()
-    
-    # Ищем последнюю неудачную попытку оплаты
-    cursor.execute('''
-    SELECT * FROM payments 
-    WHERE buyer_email = ? 
-    AND (status = 'subscription-failed' OR status = 'failed')
-    ORDER BY timestamp DESC
-    LIMIT 1
-    ''', (f"{user_id}@t.me",))
-    
-    failed_payment = cursor.fetchone()
-    
-    conn.close()
-    
-    if active_subscription:
-        return {
-            "status": "active",
-            "data": active_subscription
-        }
-    elif failed_payment:
-        return {
-            "status": "failed",
-            "data": failed_payment
-        }
-    else:
-        return {
-            "status": "no_subscription"
-        }
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем последний платеж пользователя
+        cursor.execute('''
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                event_type,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+            WHERE buyer_email = ?
+        )
+        SELECT status, timestamp, event_type
+        FROM LastPayments
+        WHERE rn = 1
+        ''', (f"{user_id}@t.me",))
+        
+        payment = cursor.fetchone()
+        conn.close()
+        
+        if payment:
+            status, timestamp, event_type = payment
+            # Проверяем, что статус активный и тип события подходящий
+            is_active = (
+                status in ['subscription-active', 'active'] and
+                event_type in ['payment.success', 'subscription.recurring.payment.success']
+            )
+            return {
+                "status": "active" if is_active else "inactive",
+                "data": payment
+            }
+        
+        return {"status": "no_subscription"}
+        
+    except Exception as e:
+        logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
+        return {"status": "error", "error": str(e)}
 
 # Функция для добавления пользователя в закрытый канал
 def add_user_to_channel(user_id):
@@ -499,7 +500,6 @@ def subscribe_command(message):
         period_buttons = []
         for price in sub["prices"]:
             period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
-            # Получаем цену в рублях для отображения в кнопке
             rub_amount = price["currencies"].get("RUB", 0)
             button_text = f"{period_text} - {rub_amount} ₽"
             callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
@@ -509,7 +509,6 @@ def subscribe_command(message):
         
         markup.add(*period_buttons)
         
-        # Отправляем информацию о подписке с кнопками выбора периода
         message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
         bot.send_message(
             message.chat.id,
@@ -686,7 +685,6 @@ def status_command(message):
             activation_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
             formatted_activation = activation_date.strftime("%d.%m.%Y %H:%M")
             
-            # Получаем дату окончания подписки
             try:
                 raw_data = json.loads(raw_data)
                 periodicity = raw_data.get('periodicity', 'MONTHLY')
@@ -705,20 +703,29 @@ def status_command(message):
                 
                 if status in ['subscription-active', 'active']:
                     # Создаем inline клавиатуру для отмены подписки
-                    inline_markup = types.InlineKeyboardMarkup()
+                    inline_markup = types.InlineKeyboardMarkup(row_width=1)
                     cancel_button = types.InlineKeyboardButton(
                         text="❌ Отменить подписку",
                         callback_data=f"cancel_{parent_contract_id or contract_id}"
                     )
                     inline_markup.add(cancel_button)
                     
+                    # Добавляем кнопку "Перейти в канал" в основную клавиатуру
+                    reply_markup.add(
+                        types.KeyboardButton('Перейти в канал')
+                    )
+                    
                     message_text = (
                         f"✅ <b>Ваша подписка активна</b>\n\n"
                         f"📅 Дата активации: {formatted_activation}\n"
                         f"⏳ Дата окончания: {formatted_end_date}\n"
                         f"📊 Осталось дней: {max(0, days_left)}\n"
-                        f"📦 Тип подписки: {subscription_type}"
+                        f"📦 Тип подписки: {subscription_type}\n"
                     )
+                    
+                    # Добавляем ссылку на канал, если она задана
+                    if CHANNEL_LINK:
+                        message_text += f"\n🔗 Ссылка на канал: {CHANNEL_LINK}"
                 else:
                     message_text = (
                         f"❌ <b>Ваша подписка неактивна</b>\n\n"
@@ -726,7 +733,6 @@ def status_command(message):
                         f"ℹ️ Статус: {status}\n\n"
                         f"Для оформления новой подписки используйте команду /subscribe"
                     )
-                    # Добавляем кнопку "Оформить подписку" только для неактивной подписки
                     reply_markup.add(types.KeyboardButton('Оформить подписку'))
                     inline_markup = None
             except Exception as e:
@@ -745,12 +751,13 @@ def status_command(message):
         # Добавляем кнопку поддержки
         reply_markup.add(types.KeyboardButton('Поддержка'))
         
-        # Отправляем сообщение с обеими клавиатурами
+        # Отправляем сообщение
         bot.reply_to(
             message, 
             message_text, 
             parse_mode="HTML",
-            reply_markup=inline_markup or reply_markup
+            reply_markup=inline_markup or reply_markup,
+            disable_web_page_preview=True
         )
         
     except Exception as e:
@@ -1181,6 +1188,15 @@ def text_handler(message):
         status_command(message)
     elif message.text == 'Поддержка':
         support_handler(message)
+    elif message.text == 'Перейти в канал':
+        if CHANNEL_LINK:
+            bot.reply_to(
+                message,
+                f"🔗 Ссылка для входа в канал:\n{CHANNEL_LINK}",
+                disable_web_page_preview=True
+            )
+        else:
+            bot.reply_to(message, "❌ Ссылка на канал не настроена")
     else:
         # Проверяем, является ли сообщение командой
         if message.text.startswith('/'):
