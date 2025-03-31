@@ -670,6 +670,10 @@ def status_command(message):
         
         payment_info = cursor.fetchone()
         
+        # Создаем клавиатуру
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton('Оформить подписку'))
+        
         if payment_info:
             status, timestamp, raw_data = payment_info
             
@@ -702,6 +706,8 @@ def status_command(message):
                         f"📊 Осталось дней: {max(0, days_left)}\n"
                         f"📦 Тип подписки: {subscription_type}"
                     )
+                    # Добавляем кнопку отмены подписки для активных подписок
+                    markup.add(types.KeyboardButton('Отменить подписку'))
                 else:
                     message_text = (
                         f"❌ <b>Ваша подписка неактивна</b>\n\n"
@@ -718,7 +724,7 @@ def status_command(message):
                 "Для оформления подписки используйте команду /subscribe"
             )
         
-        bot.reply_to(message, message_text, parse_mode="HTML")
+        bot.reply_to(message, message_text, parse_mode="HTML", reply_markup=markup)
         
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
@@ -1154,6 +1160,8 @@ def text_handler(message):
         subscribe_command(message)
     elif message.text == 'Статус подписки':
         status_command(message)
+    elif message.text == 'Отменить подписку':
+        cancel_subscription(message)
     else:
         # Проверяем, является ли сообщение командой
         if message.text.startswith('/'):
