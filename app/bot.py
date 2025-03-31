@@ -96,20 +96,20 @@ def get_available_subscriptions():
         logger.error(f"Ошибка при получении списка подписок: {str(e)}")
         return None
 
-# Функция для создания ссылки на оплату с учетом периода
+# Функция для создания ссылки на оплату
 def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
     url = "https://gate.lava.top/api/v2/invoice"
     headers = {
         "Content-Type": "application/json",
         "X-Api-Key": LAVA_API_KEY
     }
+    
     payload = {
         "email": f"{user_id}@t.me",
         "offerId": offer_id,
         "periodicity": periodicity,
         "currency": currency,
         "buyerLanguage": "RU",
-        "paymentMethod": "BANK131",
         "clientUtm": {}
     }
     
@@ -119,6 +119,8 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
         return response.json()
     except Exception as e:
         logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Ответ сервера: {e.response.text}")
         return None
 
 # Функция для отмены подписки
@@ -576,18 +578,19 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-        markup = types.InlineKeyboardMarkup(row_width=1)  # Изменяем row_width на 1
+        markup = types.InlineKeyboardMarkup(row_width=1)
         currency_buttons = []
         
         for currency, amount in price_info["currencies"].items():
             currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
+            # Убираем информацию о методе оплаты из текста кнопки
             button_text = f"Оплатить {amount} {currency_symbol}"
             callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
             currency_buttons.append(
                 types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
             )
         
-        # Добавляем каждую кнопку отдельно, чтобы они располагались на разных строках
+        # Добавляем каждую кнопку отдельно
         for button in currency_buttons:
             markup.add(button)
         
@@ -600,7 +603,7 @@ def process_payment_callback(call):
         
         period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
         bot.edit_message_text(
-            f"Выберите валюту для оплаты подписки на {period_text}:",
+            f"Выберите способ оплаты подписки на {period_text}:",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
