@@ -576,7 +576,7 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-        markup = types.InlineKeyboardMarkup(row_width=3)
+        markup = types.InlineKeyboardMarkup(row_width=1)  # Изменяем row_width на 1
         currency_buttons = []
         
         for currency, amount in price_info["currencies"].items():
@@ -587,7 +587,9 @@ def process_payment_callback(call):
                 types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
             )
         
-        markup.add(*currency_buttons)
+        # Добавляем каждую кнопку отдельно, чтобы они располагались на разных строках
+        for button in currency_buttons:
+            markup.add(button)
         
         # Добавляем кнопку "Назад"
         back_button = types.InlineKeyboardButton(
@@ -675,12 +677,47 @@ def process_currency_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
-# Добавляем обработчик для кнопки "Назад к подписке"
+# Обновляем обработчик для кнопки "Назад к подписке"
 @bot.callback_query_handler(func=lambda call: call.data.startswith('back_to_subscription|'))
 def process_back_to_subscription(call):
     try:
         offer_id = call.data.split('|')[1]
-        subscribe_command(call.message)
+        
+        # Удаляем текущее сообщение
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        # Получаем информацию о подписке
+        subscriptions = get_available_subscriptions()
+        if not subscriptions:
+            raise ValueError("Не удалось получить информацию о подписке")
+        
+        subscription = next((sub for sub in subscriptions if sub["offer_id"] == offer_id), None)
+        if not subscription:
+            raise ValueError("Подписка не найдена")
+        
+        # Создаем новое сообщение с кнопками периодов
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        period_buttons = []
+        
+        for price in subscription["prices"]:
+            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
+            rub_amount = price["currencies"].get("RUB", 0)
+            button_text = f"{period_text} - {rub_amount} ₽"
+            callback_data = f"pay|{subscription['offer_id']}|{price['periodicity']}"
+            period_buttons.append(
+                types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
+            )
+        
+        markup.add(*period_buttons)
+        
+        message_text = f"<b>{subscription['name']}</b>\n\n{subscription['description']}\n\nВыберите период подписки:"
+        bot.send_message(
+            call.message.chat.id,
+            message_text,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+        
     except Exception as e:
         logger.error(f"Ошибка при возврате к выбору периода: {str(e)}")
         bot.answer_callback_query(
