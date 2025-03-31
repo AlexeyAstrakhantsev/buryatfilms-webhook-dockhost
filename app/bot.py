@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
+import json
 
 # Настройка логирования
 DATA_DIR = Path("/mount/database")
@@ -241,7 +242,6 @@ def add_user_to_channel(user_id):
             
             # Определяем дату окончания подписки
             try:
-                import json
                 raw_data = json.loads(raw_data)
                 periodicity = raw_data.get('periodicity', 'MONTHLY')
                 days = {
@@ -647,7 +647,6 @@ def status_command(message):
         periodicity = "MONTHLY"  # значение по умолчанию
         if payment_info and payment_info[1]:
             try:
-                import json
                 raw_data = json.loads(payment_info[1])
                 if 'periodicity' in raw_data:
                     periodicity = raw_data['periodicity']
@@ -1017,3 +1016,173 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
+
+# Добавляем после других обработчиков команд
+
+@bot.message_handler(commands=['test_payment'])
+def test_payment_command(message):
+    # Проверяем, что команду отправил администратор
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору")
+        return
+    
+    # Проверяем, есть ли ID пользователя в сообщении
+    args = message.text.split()
+    if len(args) > 1:
+        try:
+            user_id = int(args[1])
+        except ValueError:
+            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
+            return
+    else:
+        user_id = message.from_user.id
+    
+    # Создаем тестовый платеж
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Текущее время в формате ISO
+    current_time = datetime.utcnow().isoformat() + 'Z'
+    
+    # Тестовые данные платежа
+    test_payment = {
+        'event_type': 'payment.success',
+        'product_id': 'test_product',
+        'product_title': 'Тестовая подписка',
+        'buyer_email': f"{user_id}@t.me",
+        'contract_id': f"test_{int(time.time())}",
+        'parent_contract_id': None,
+        'amount': 100,
+        'currency': 'RUB',
+        'timestamp': current_time,
+        'status': 'active',
+        'error_message': None,
+        'raw_data': json.dumps({
+            'periodicity': 'MONTHLY',
+            'test_payment': True
+        })
+    }
+    
+    try:
+        # Добавляем тестовый платеж в БД
+        cursor.execute('''
+        INSERT INTO payments (
+            event_type, product_id, product_title, buyer_email,
+            contract_id, parent_contract_id, amount, currency,
+            timestamp, status, error_message, raw_data, received_at, processed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ''', (
+            test_payment['event_type'],
+            test_payment['product_id'],
+            test_payment['product_title'],
+            test_payment['buyer_email'],
+            test_payment['contract_id'],
+            test_payment['parent_contract_id'],
+            test_payment['amount'],
+            test_payment['currency'],
+            test_payment['timestamp'],
+            test_payment['status'],
+            test_payment['error_message'],
+            test_payment['raw_data'],
+            current_time
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        bot.reply_to(message, 
+            f"Тестовый платеж создан успешно для пользователя {user_id}!\n"
+            "Бот должен обработать его в течение минуты.\n"
+            "Используйте /status для проверки статуса подписки."
+        )
+        
+        logger.info(f"Создан тестовый платеж для пользователя {user_id}")
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
+        logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
+
+# Добавляем команду для эмуляции неуспешного платежа
+@bot.message_handler(commands=['test_failed_payment'])
+def test_failed_payment_command(message):
+    # Проверяем, что команду отправил администратор
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору")
+        return
+    
+    # Проверяем, есть ли ID пользователя в сообщении
+    args = message.text.split()
+    if len(args) > 1:
+        try:
+            user_id = int(args[1])
+        except ValueError:
+            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
+            return
+    else:
+        user_id = message.from_user.id
+    
+    # Создаем тестовый неуспешный платеж
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    current_time = datetime.utcnow().isoformat() + 'Z'
+    
+    test_payment = {
+        'event_type': 'payment.failed',
+        'product_id': 'test_product',
+        'product_title': 'Тестовая подписка',
+        'buyer_email': f"{user_id}@t.me",
+        'contract_id': f"test_failed_{int(time.time())}",
+        'parent_contract_id': None,
+        'amount': 100,
+        'currency': 'RUB',
+        'timestamp': current_time,
+        'status': 'failed',
+        'error_message': 'Тестовая ошибка оплаты',
+        'raw_data': json.dumps({
+            'periodicity': 'MONTHLY',
+            'test_payment': True
+        })
+    }
+    
+    try:
+        cursor.execute('''
+        INSERT INTO payments (
+            event_type, product_id, product_title, buyer_email,
+            contract_id, parent_contract_id, amount, currency,
+            timestamp, status, error_message, raw_data, received_at, processed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ''', (
+            test_payment['event_type'],
+            test_payment['product_id'],
+            test_payment['product_title'],
+            test_payment['buyer_email'],
+            test_payment['contract_id'],
+            test_payment['parent_contract_id'],
+            test_payment['amount'],
+            test_payment['currency'],
+            test_payment['timestamp'],
+            test_payment['status'],
+            test_payment['error_message'],
+            test_payment['raw_data'],
+            current_time
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        bot.reply_to(message, 
+            f"Тестовый неуспешный платеж создан для пользователя {user_id}!\n"
+            "Бот должен обработать его в течение минуты.\n"
+            "Используйте /status для проверки статуса."
+        )
+        
+        logger.info(f"Создан тестовый неуспешный платеж для пользователя {user_id}")
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
+        logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
