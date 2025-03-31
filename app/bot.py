@@ -30,12 +30,18 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
 
-# Добавляем словарь для перевода периодов
+# Обновляем словари для переводов
 PERIOD_TRANSLATIONS = {
     "MONTHLY": "1 месяц",
     "PERIOD_90_DAYS": "3 месяца",
     "PERIOD_180_DAYS": "6 месяцев",
     "PERIOD_YEAR": "1 год"
+}
+
+CURRENCY_TRANSLATIONS = {
+    "RUB": "₽",
+    "USD": "$",
+    "EUR": "€"
 }
 
 # Инициализация бота
@@ -62,22 +68,27 @@ def get_available_subscriptions():
         for item in data.get("items", []):
             if item.get("type") == "SUBSCRIPTION":
                 for offer in item.get("offers", []):
-                    # Фильтруем цены только в рублях
-                    rub_prices = [
-                        {
-                            "amount": price["amount"],
-                            "periodicity": price["periodicity"]
-                        }
-                        for price in offer["prices"]
-                        if price["currency"] == "RUB"
-                    ]
+                    # Группируем цены по периодичности
+                    prices_by_period = {}
+                    for price in offer["prices"]:
+                        if price["periodicity"] not in prices_by_period:
+                            prices_by_period[price["periodicity"]] = {}
+                        prices_by_period[price["periodicity"]][price["currency"]] = price["amount"]
                     
-                    if rub_prices:
+                    # Преобразуем в список для удобства
+                    prices = []
+                    for periodicity, currencies in prices_by_period.items():
+                        prices.append({
+                            "periodicity": periodicity,
+                            "currencies": currencies
+                        })
+                    
+                    if prices:
                         subscriptions.append({
                             "offer_id": offer["id"],
                             "name": offer["name"],
                             "description": offer["description"],
-                            "prices": rub_prices
+                            "prices": prices
                         })
         
         return subscriptions
@@ -86,7 +97,7 @@ def get_available_subscriptions():
         return None
 
 # Функция для создания ссылки на оплату с учетом периода
-def create_payment_link(user_id, offer_id, periodicity):
+def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
     url = "https://gate.lava.top/api/v2/invoice"
     headers = {
         "Content-Type": "application/json",
@@ -96,7 +107,7 @@ def create_payment_link(user_id, offer_id, periodicity):
         "email": f"{user_id}@t.me",
         "offerId": offer_id,
         "periodicity": periodicity,
-        "currency": "RUB",
+        "currency": currency,
         "buyerLanguage": "RU",
         "paymentMethod": "BANK131",
         "clientUtm": {}
@@ -542,15 +553,79 @@ def process_payment_callback(call):
     username = call.from_user.username or f"user_{user_id}"
     
     try:
-        # Разбираем данные из callback, используя разделитель "|"
+        # Разбираем данные из callback
         parts = call.data.split('|')
         if len(parts) != 3:
             raise ValueError("Неверный формат данных callback")
         
         _, offer_id, periodicity = parts
         
+        # Получаем информацию о подписке для отображения цен
+        subscriptions = get_available_subscriptions()
+        if not subscriptions:
+            raise ValueError("Не удалось получить информацию о подписке")
+        
+        # Ищем нужную подписку и период
+        subscription = next((sub for sub in subscriptions if sub["offer_id"] == offer_id), None)
+        if not subscription:
+            raise ValueError("Подписка не найдена")
+        
+        price_info = next((p for p in subscription["prices"] if p["periodicity"] == periodicity), None)
+        if not price_info:
+            raise ValueError("Информация о ценах не найдена")
+        
+        # Создаем кнопки выбора валюты
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        currency_buttons = []
+        
+        for currency, amount in price_info["currencies"].items():
+            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
+            button_text = f"Оплатить {amount} {currency_symbol}"
+            callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
+            currency_buttons.append(
+                types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
+            )
+        
+        markup.add(*currency_buttons)
+        
+        # Добавляем кнопку "Назад"
+        back_button = types.InlineKeyboardButton(
+            text="← Назад к выбору периода",
+            callback_data=f"back_to_subscription|{offer_id}"
+        )
+        markup.add(back_button)
+        
+        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+        bot.edit_message_text(
+            f"Выберите валюту для оплаты подписки на {period_text}:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обработке callback выбора периода: {str(e)}")
+        bot.answer_callback_query(
+            call.id,
+            "Произошла ошибка. Пожалуйста, попробуйте позже."
+        )
+
+# Добавляем обработчик для кнопок выбора валюты
+@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
+def process_currency_callback(call):
+    user_id = call.from_user.id
+    username = call.from_user.username or f"user_{user_id}"
+    
+    try:
+        # Разбираем данные из callback
+        parts = call.data.split('|')
+        if len(parts) != 4:
+            raise ValueError("Неверный формат данных callback")
+        
+        _, offer_id, periodicity, currency = parts
+        
         # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity)
+        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
         
         if payment_data and "paymentUrl" in payment_data:
             markup = types.InlineKeyboardMarkup()
@@ -560,9 +635,17 @@ def process_payment_callback(call):
             )
             markup.add(payment_button)
             
+            # Добавляем кнопку "Назад к выбору валюты"
+            back_button = types.InlineKeyboardButton(
+                text="← Назад к выбору валюты",
+                callback_data=f"pay|{offer_id}|{periodicity}"
+            )
+            markup.add(back_button)
+            
             period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
             bot.edit_message_text(
-                f"Для оплаты подписки на {period_text} нажмите на кнопку ниже:",
+                f"Для оплаты подписки на {period_text} ({currency_symbol}) нажмите на кнопку ниже:",
                 call.message.chat.id,
                 call.message.message_id,
                 reply_markup=markup
@@ -574,6 +657,7 @@ def process_payment_callback(call):
             admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
                           f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
                           f"<b>Период:</b> {period_text}\n" \
+                          f"<b>Валюта:</b> {currency}\n" \
                           f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
             notify_admin(admin_message)
         else:
@@ -584,7 +668,20 @@ def process_payment_callback(call):
             logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
     
     except Exception as e:
-        logger.error(f"Ошибка при обработке callback оплаты: {str(e)}")
+        logger.error(f"Ошибка при обработке callback выбора валюты: {str(e)}")
+        bot.answer_callback_query(
+            call.id,
+            "Произошла ошибка. Пожалуйста, попробуйте позже."
+        )
+
+# Добавляем обработчик для кнопки "Назад к подписке"
+@bot.callback_query_handler(func=lambda call: call.data.startswith('back_to_subscription|'))
+def process_back_to_subscription(call):
+    try:
+        offer_id = call.data.split('|')[1]
+        subscribe_command(call.message)
+    except Exception as e:
+        logger.error(f"Ошибка при возврате к выбору периода: {str(e)}")
         bot.answer_callback_query(
             call.id,
             "Произошла ошибка. Пожалуйста, попробуйте позже."
