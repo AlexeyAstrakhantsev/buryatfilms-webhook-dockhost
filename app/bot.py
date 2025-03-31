@@ -620,77 +620,89 @@ def check_subscription_expiration():
     except Exception as e:
         logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
 
-# Обновляем функцию status_command
+# Обновляем функцию status_command для красивого вывода даты
 @bot.message_handler(commands=['status'])
 def status_command(message):
     user_id = message.from_user.id
-    username = message.from_user.username or f"user_{user_id}"
     
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил статус подписки")
-    
-    subscription = check_subscription_status(user_id)
-    
-    if subscription["status"] == "active":
-        data = subscription["data"]
-        
-        # Получаем информацию о периодичности подписки
+    try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        # Получаем информацию о последнем платеже и статусе подписки
         cursor.execute('''
-        SELECT event_type, raw_data
-        FROM payments
-        WHERE buyer_email = ? AND contract_id = ?
-        ''', (f"{user_id}@t.me", data[5]))
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                raw_data,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+            WHERE buyer_email = ?
+        )
+        SELECT status, timestamp, raw_data
+        FROM LastPayments
+        WHERE rn = 1
+        ''', (f"{user_id}@t.me",))
+        
         payment_info = cursor.fetchone()
-        conn.close()
         
-        # Пытаемся получить периодичность из raw_data
-        periodicity = "MONTHLY"  # значение по умолчанию
-        if payment_info and payment_info[1]:
+        if payment_info:
+            status, timestamp, raw_data = payment_info
+            
+            # Преобразуем timestamp в читаемый формат
+            activation_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            formatted_activation = activation_date.strftime("%d.%m.%Y %H:%M")
+            
+            # Получаем дату окончания подписки
             try:
-                raw_data = json.loads(payment_info[1])
-                if 'periodicity' in raw_data:
-                    periodicity = raw_data['periodicity']
-            except:
-                pass
+                raw_data = json.loads(raw_data)
+                periodicity = raw_data.get('periodicity', 'MONTHLY')
+                days = {
+                    "MONTHLY": 30,
+                    "PERIOD_90_DAYS": 90,
+                    "PERIOD_180_DAYS": 180,
+                    "PERIOD_YEAR": 365
+                }.get(periodicity, 30)
+                
+                end_date = activation_date + timedelta(days=days)
+                formatted_end_date = end_date.strftime("%d.%m.%Y %H:%M")
+                days_left = (end_date - datetime.now(end_date.tzinfo)).days
+                
+                subscription_type = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+                
+                if status in ['subscription-active', 'active']:
+                    message_text = (
+                        f"✅ <b>Ваша подписка активна</b>\n\n"
+                        f"📅 Дата активации: {formatted_activation}\n"
+                        f"⏳ Дата окончания: {formatted_end_date}\n"
+                        f"📊 Осталось дней: {max(0, days_left)}\n"
+                        f"📦 Тип подписки: {subscription_type}"
+                    )
+                else:
+                    message_text = (
+                        f"❌ <b>Ваша подписка неактивна</b>\n\n"
+                        f"📅 Последний платеж: {formatted_activation}\n"
+                        f"ℹ️ Статус: {status}\n\n"
+                        f"Для оформления новой подписки используйте команду /subscribe"
+                    )
+            except Exception as e:
+                logger.error(f"Ошибка при обработке данных подписки: {str(e)}")
+                message_text = "❌ Ошибка при получении информации о подписке"
+        else:
+            message_text = (
+                "❌ <b>У вас нет активной подписки</b>\n\n"
+                "Для оформления подписки используйте команду /subscribe"
+            )
         
-        # Вычисляем оставшиеся дни
-        days_left = calculate_days_left(data[9], periodicity)
+        bot.reply_to(message, message_text, parse_mode="HTML")
         
-        # Создаем кнопку для отмены подписки
-        markup = types.InlineKeyboardMarkup()
-        cancel_button = types.InlineKeyboardButton(
-            text="Отменить подписку", 
-            callback_data=f"cancel_{data[5] or data[6]}"  # contract_id или parent_contract_id
-        )
-        markup.add(cancel_button)
-        
-        # Формируем сообщение с информацией о днях
-        days_text = f"\nДо окончания подписки осталось: {days_left} дней"
-        
-        bot.send_message(
-            message.chat.id,
-            f"Ваша подписка активна!\n"
-            f"Продукт: {data[3]}\n"
-            f"Дата активации: {data[9]}\n"
-            f"Сумма: {data[7]} {data[8]}"
-            f"{days_text}",
-            reply_markup=markup
-        )
-    elif subscription["status"] == "failed":
-        data = subscription["data"]
-        bot.send_message(
-            message.chat.id,
-            f"Последняя попытка оплаты не удалась.\n"
-            f"Причина: {data[11]}\n"
-            f"Дата: {data[9]}\n\n"
-            f"Вы можете попробовать оформить подписку снова, используя команду /subscribe"
-        )
-    else:
-        bot.send_message(
-            message.chat.id,
-            "У вас нет активной подписки. Используйте команду /subscribe для оформления."
-        )
+    except Exception as e:
+        logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
+        bot.reply_to(message, "❌ Произошла ошибка при проверке статуса подписки")
+    finally:
+        conn.close()
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
@@ -1020,6 +1032,98 @@ def test_failed_payment_command(message):
         conn.close()
         bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
         logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
+
+# Добавляем команду для тестирования истечения подписки
+@bot.message_handler(commands=['test_expire'])
+def test_expire_command(message):
+    # Проверяем, что команду отправил администратор
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору")
+        return
+    
+    # Проверяем, есть ли ID пользователя в сообщении
+    args = message.text.split()
+    if len(args) > 1:
+        try:
+            user_id = int(args[1])
+        except ValueError:
+            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
+            return
+    else:
+        user_id = message.from_user.id
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Создаем тестовый платеж с истекшей датой
+        current_time = (datetime.utcnow() - timedelta(days=31)).isoformat() + 'Z'
+        
+        test_payment = {
+            'event_type': 'payment.success',
+            'product_id': 'test_product',
+            'product_title': 'Тестовая подписка',
+            'buyer_email': f"{user_id}@t.me",
+            'contract_id': f"test_expired_{int(time.time())}",
+            'parent_contract_id': None,
+            'amount': 100,
+            'currency': 'RUB',
+            'timestamp': current_time,
+            'status': 'active',
+            'error_message': None,
+            'raw_data': json.dumps({
+                'periodicity': 'MONTHLY',
+                'test_payment': True
+            })
+        }
+        
+        # Добавляем тестовый платеж в БД
+        cursor.execute('''
+        INSERT INTO payments (
+            event_type, product_id, product_title, buyer_email,
+            contract_id, parent_contract_id, amount, currency,
+            timestamp, status, error_message, raw_data, received_at, processed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ''', (
+            test_payment['event_type'],
+            test_payment['product_id'],
+            test_payment['product_title'],
+            test_payment['buyer_email'],
+            test_payment['contract_id'],
+            test_payment['parent_contract_id'],
+            test_payment['amount'],
+            test_payment['currency'],
+            test_payment['timestamp'],
+            test_payment['status'],
+            test_payment['error_message'],
+            test_payment['raw_data'],
+            current_time
+        ))
+        
+        # Обновляем или добавляем запись в channel_members
+        cursor.execute('''
+        INSERT OR REPLACE INTO channel_members 
+        (user_id, status, subscription_end_date, last_payment_id)
+        VALUES (?, 'active', ?, last_insert_rowid())
+        ''', (user_id, (datetime.fromisoformat(current_time.replace('Z', '+00:00')) + timedelta(days=30)).isoformat()))
+        
+        conn.commit()
+        conn.close()
+        
+        bot.reply_to(message, 
+            f"Создана тестовая истекшая подписка для пользователя {user_id}!\n"
+            "Бот должен удалить пользователя при следующей проверке подписок (в течение 15 минут).\n"
+            "Используйте /status для проверки статуса подписки."
+        )
+        
+        logger.info(f"Создана тестовая истекшая подписка для пользователя {user_id}")
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        bot.reply_to(message, f"Ошибка при создании тестовой истекшей подписки: {str(e)}")
+        logger.error(f"Ошибка при создании тестовой истекшей подписки: {str(e)}")
 
 # Обработчик текстовых сообщений должен быть последним
 @bot.message_handler(content_types=['text'])
