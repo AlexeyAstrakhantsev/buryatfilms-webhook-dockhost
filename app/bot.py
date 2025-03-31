@@ -439,8 +439,9 @@ def subscribe_command(message):
         period_buttons = []
         for price in sub["prices"]:
             period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
-            button_text = f"{period_text} - {price['amount']} руб."
-            # Используем разделитель "|" вместо "_" для избежания конфликтов с periodicity
+            # Получаем цену в рублях для отображения в кнопке
+            rub_amount = price["currencies"].get("RUB", 0)
+            button_text = f"{period_text} - {rub_amount} ₽"
             callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
             period_buttons.append(
                 types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
