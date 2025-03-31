@@ -31,6 +31,7 @@ LAVA_API_KEY = os.getenv("LAVA_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя пользователя техподдержки в Telegram
 
 # Список привилегированных пользователей (всегда имеют доступ к каналу)
 PRIVILEGED_USERS = os.getenv("PRIVILEGED_USERS", "").split(",")  # ID через запятую в переменной окружения
@@ -455,7 +456,9 @@ def start_command(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn_subscribe = types.KeyboardButton('Оформить подписку')
     btn_status = types.KeyboardButton('Статус подписки')
+    btn_support = types.KeyboardButton('Поддержка')
     markup.add(btn_subscribe, btn_status)
+    markup.add(btn_support)  # Добавляем кнопку поддержки отдельной строкой
     
     bot.send_message(
         message.chat.id,
@@ -673,7 +676,7 @@ def status_command(message):
         payment_info = cursor.fetchone()
         
         # Создаем базовую клавиатуру
-        reply_markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        reply_markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
         reply_markup.add(types.KeyboardButton('Статус подписки'))
         
         if payment_info:
@@ -739,21 +742,16 @@ def status_command(message):
             reply_markup.add(types.KeyboardButton('Оформить подписку'))
             inline_markup = None
         
-        # Отправляем сообщение с соответствующими клавиатурами
+        # Добавляем кнопку поддержки
+        reply_markup.add(types.KeyboardButton('Поддержка'))
+        
+        # Отправляем сообщение с обеими клавиатурами
         bot.reply_to(
             message, 
             message_text, 
             parse_mode="HTML",
-            reply_markup=reply_markup
+            reply_markup=inline_markup or reply_markup
         )
-        
-        # Если есть inline клавиатура, отправляем её отдельным сообщением
-        if inline_markup:
-            bot.send_message(
-                message.chat.id,
-                "Управление подпиской:",
-                reply_markup=inline_markup
-            )
         
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
@@ -761,52 +759,44 @@ def status_command(message):
     finally:
         conn.close()
 
+# Добавляем обработчик callback-запросов для кнопки отмены подписки
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
-    user_id = call.from_user.id
-    username = call.from_user.username or f"user_{user_id}"
-    contract_id = call.data.split('_')[1]
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил отмену подписки {contract_id}")
-    
-    # Уведомляем администратора о попытке отмены подписки
-    admin_message = f"<b>Попытка отмены подписки</b>\n\n" \
-                   f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
-                   f"<b>ID контракта:</b> {contract_id}"
-    notify_admin(admin_message)
-    
-    # Сообщаем пользователю, что запрос обрабатывается
-    bot.answer_callback_query(call.id, "Обрабатываем ваш запрос...")
-    bot.edit_message_text(
-        "Обрабатываем запрос на отмену подписки...",
-        call.message.chat.id,
-        call.message.message_id
-    )
-    
-    # Отменяем подписку
-    if cancel_subscription(user_id, contract_id):
-        # Удаляем пользователя из канала только при успешной отмене
-        remove_user_from_channel(user_id)
+    try:
+        contract_id = call.data.split('_')[1]
+        user_id = call.from_user.id
         
-        bot.edit_message_text(
-            "Ваша подписка успешно отменена. Доступ к закрытому каналу прекращен.",
-            call.message.chat.id,
-            call.message.message_id
+        # Отменяем подписку
+        if cancel_subscription(user_id, contract_id):
+            # Обновляем сообщение после отмены
+            bot.edit_message_text(
+                "✅ Ваша подписка успешно отменена.\n"
+                "Для оформления новой подписки используйте команду /subscribe",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=None
+            )
+            # Отправляем новую клавиатуру
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add(types.KeyboardButton('Оформить подписку'))
+            markup.add(types.KeyboardButton('Статус подписки'))
+            markup.add(types.KeyboardButton('Поддержка'))
+            bot.send_message(
+                call.message.chat.id,
+                "Выберите действие:",
+                reply_markup=markup
+            )
+        else:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке отмены подписки: {str(e)}")
+        bot.answer_callback_query(
+            call.id,
+            "❌ Произошла ошибка при отмене подписки"
         )
-        
-        # Уведомляем администратора об успешной отмене
-        notify_admin(f"<b>Подписка успешно отменена</b>\n\n" \
-                    f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
-                    f"<b>ID контракта:</b> {contract_id}")
-    else:
-        bot.edit_message_text(
-            "Произошла ошибка при отмене подписки. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
-            call.message.chat.id,
-            call.message.message_id
-        )
-        
-        # Уведомляем администратора об ошибке
-        notify_admin(f"<b>ОШИБКА:</b> Не удалось отменить подписку для пользователя {username} (ID: {user_id}), контракт {contract_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay|'))
 def process_payment_callback(call):
@@ -1189,14 +1179,40 @@ def text_handler(message):
         subscribe_command(message)
     elif message.text == 'Статус подписки':
         status_command(message)
-    elif message.text == 'Отменить подписку':
-        cancel_subscription(message)
+    elif message.text == 'Поддержка':
+        support_handler(message)
     else:
         # Проверяем, является ли сообщение командой
         if message.text.startswith('/'):
             bot.reply_to(message, "Неизвестная команда. Доступные команды: /start, /subscribe, /status")
         else:
             bot.reply_to(message, "Используйте кнопки или команды /start, /subscribe, /status")
+
+# Функция для обработки кнопки "Поддержка"
+def support_handler(message):
+    if not SUPPORT_USERNAME:
+        bot.reply_to(message, "❌ Извините, служба поддержки временно недоступна")
+        logger.error("Не указан username службы поддержки (SUPPORT_USERNAME)")
+        return
+    
+    support_link = f"https://t.me/{SUPPORT_USERNAME}"
+    
+    # Создаем inline кнопку для перехода в чат поддержки
+    markup = types.InlineKeyboardMarkup()
+    support_button = types.InlineKeyboardButton(
+        text="Написать в поддержку",
+        url=support_link
+    )
+    markup.add(support_button)
+    
+    bot.reply_to(
+        message,
+        "📞 Служба поддержки всегда готова помочь вам!\n\n"
+        "Нажмите на кнопку ниже, чтобы связаться с нами:",
+        reply_markup=markup
+    )
+    
+    logger.info(f"Пользователь {message.from_user.id} запросил контакт поддержки")
 
 # Функция для периодической проверки новых платежей
 def check_payments_periodically():
