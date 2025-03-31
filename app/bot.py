@@ -659,23 +659,25 @@ def status_command(message):
                 status,
                 timestamp,
                 raw_data,
+                contract_id,
+                parent_contract_id,
                 ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
             FROM payments
             WHERE buyer_email = ?
         )
-        SELECT status, timestamp, raw_data
+        SELECT status, timestamp, raw_data, contract_id, parent_contract_id
         FROM LastPayments
         WHERE rn = 1
         ''', (f"{user_id}@t.me",))
         
         payment_info = cursor.fetchone()
         
-        # Создаем клавиатуру
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add(types.KeyboardButton('Оформить подписку'))
+        # Создаем базовую клавиатуру
+        reply_markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        reply_markup.add(types.KeyboardButton('Статус подписки'))
         
         if payment_info:
-            status, timestamp, raw_data = payment_info
+            status, timestamp, raw_data, contract_id, parent_contract_id = payment_info
             
             # Преобразуем timestamp в читаемый формат
             activation_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
@@ -699,6 +701,14 @@ def status_command(message):
                 subscription_type = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
                 
                 if status in ['subscription-active', 'active']:
+                    # Создаем inline клавиатуру для отмены подписки
+                    inline_markup = types.InlineKeyboardMarkup()
+                    cancel_button = types.InlineKeyboardButton(
+                        text="❌ Отменить подписку",
+                        callback_data=f"cancel_{parent_contract_id or contract_id}"
+                    )
+                    inline_markup.add(cancel_button)
+                    
                     message_text = (
                         f"✅ <b>Ваша подписка активна</b>\n\n"
                         f"📅 Дата активации: {formatted_activation}\n"
@@ -706,8 +716,6 @@ def status_command(message):
                         f"📊 Осталось дней: {max(0, days_left)}\n"
                         f"📦 Тип подписки: {subscription_type}"
                     )
-                    # Добавляем кнопку отмены подписки для активных подписок
-                    markup.add(types.KeyboardButton('Отменить подписку'))
                 else:
                     message_text = (
                         f"❌ <b>Ваша подписка неактивна</b>\n\n"
@@ -715,16 +723,37 @@ def status_command(message):
                         f"ℹ️ Статус: {status}\n\n"
                         f"Для оформления новой подписки используйте команду /subscribe"
                     )
+                    # Добавляем кнопку "Оформить подписку" только для неактивной подписки
+                    reply_markup.add(types.KeyboardButton('Оформить подписку'))
+                    inline_markup = None
             except Exception as e:
                 logger.error(f"Ошибка при обработке данных подписки: {str(e)}")
                 message_text = "❌ Ошибка при получении информации о подписке"
+                inline_markup = None
+                reply_markup.add(types.KeyboardButton('Оформить подписку'))
         else:
             message_text = (
                 "❌ <b>У вас нет активной подписки</b>\n\n"
                 "Для оформления подписки используйте команду /subscribe"
             )
+            reply_markup.add(types.KeyboardButton('Оформить подписку'))
+            inline_markup = None
         
-        bot.reply_to(message, message_text, parse_mode="HTML", reply_markup=markup)
+        # Отправляем сообщение с соответствующими клавиатурами
+        bot.reply_to(
+            message, 
+            message_text, 
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+        
+        # Если есть inline клавиатура, отправляем её отдельным сообщением
+        if inline_markup:
+            bot.send_message(
+                message.chat.id,
+                "Управление подпиской:",
+                reply_markup=inline_markup
+            )
         
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
