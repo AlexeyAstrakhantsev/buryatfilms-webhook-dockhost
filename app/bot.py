@@ -439,7 +439,8 @@ def update_db_structure():
     conn.commit()
     conn.close()
 
-# Обработчики команд
+# Обработчики команд должны быть перед обработчиком текстовых сообщений
+
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -804,70 +805,6 @@ def process_payment_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
-# Добавляем обработчик для кнопок выбора валюты
-@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
-def process_currency_callback(call):
-    user_id = call.from_user.id
-    username = call.from_user.username or f"user_{user_id}"
-    
-    try:
-        # Разбираем данные из callback
-        parts = call.data.split('|')
-        if len(parts) != 4:
-            raise ValueError("Неверный формат данных callback")
-        
-        _, offer_id, periodicity, currency = parts
-        
-        # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
-        
-        if payment_data and "paymentUrl" in payment_data:
-            markup = types.InlineKeyboardMarkup()
-            payment_button = types.InlineKeyboardButton(
-                text="Оплатить подписку", 
-                url=payment_data["paymentUrl"]
-            )
-            markup.add(payment_button)
-            
-            # Добавляем кнопку "Назад к выбору валюты"
-            back_button = types.InlineKeyboardButton(
-                text="← Назад к выбору валюты",
-                callback_data=f"pay|{offer_id}|{periodicity}"
-            )
-            markup.add(back_button)
-            
-            period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
-            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
-            bot.edit_message_text(
-                f"Для оплаты подписки на {period_text} ({currency_symbol}) нажмите на кнопку ниже:",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-            
-            logger.info(f"Создана ссылка на оплату для пользователя {username} (ID: {user_id})")
-            
-            # Уведомляем администратора
-            admin_message = f"<b>Создана ссылка на оплату</b>\n\n" \
-                          f"<b>Пользователь:</b> {username} (ID: {user_id})\n" \
-                          f"<b>Период:</b> {period_text}\n" \
-                          f"<b>Валюта:</b> {currency}\n" \
-                          f"<b>ID счета:</b> {payment_data.get('id', 'Н/Д')}"
-            notify_admin(admin_message)
-        else:
-            bot.answer_callback_query(
-                call.id,
-                "Произошла ошибка при создании ссылки на оплату. Пожалуйста, попробуйте позже."
-            )
-            logger.error(f"Не удалось создать ссылку на оплату для пользователя {username} (ID: {user_id})")
-    
-    except Exception as e:
-        logger.error(f"Ошибка при обработке callback выбора валюты: {str(e)}")
-        bot.answer_callback_query(
-            call.id,
-            "Произошла ошибка. Пожалуйста, попробуйте позже."
-        )
-
 # Обновляем обработчик для кнопки "Назад к подписке"
 @bot.callback_query_handler(func=lambda call: call.data.startswith('back_to_subscription|'))
 def process_back_to_subscription(call):
@@ -915,109 +852,6 @@ def process_back_to_subscription(call):
             call.id,
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
-
-@bot.message_handler(content_types=['text'])
-def text_handler(message):
-    if message.text == 'Оформить подписку':
-        subscribe_command(message)
-    elif message.text == 'Статус подписки':
-        status_command(message)
-    else:
-        bot.send_message(
-            message.chat.id,
-            "Используйте кнопки или команды /start, /subscribe, /status"
-        )
-
-# Функция для периодической проверки новых платежей
-def check_payments_periodically():
-    while True:
-        try:
-            # Проверяем существование таблицы перед запросом
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
-            table_exists = cursor.fetchone()
-            conn.close()
-            
-            if table_exists:
-                check_new_payments()
-            else:
-                logger.warning("Таблица payments еще не создана. Пропускаем проверку платежей.")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
-        
-        # Проверяем каждые 60 секунд
-        time.sleep(60)
-
-# Обновляем функцию проверки подписок
-def check_subscriptions_periodically():
-    while True:
-        try:
-            # Проверяем существование таблицы перед запросом
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
-            table_exists = cursor.fetchone()
-            conn.close()
-            
-            if table_exists:
-                check_subscription_expiration()
-                logger.info("Выполнена проверка активных подписок")
-            else:
-                logger.warning("Таблица payments еще не создана. Пропускаем проверку подписок.")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при периодической проверке подписок: {str(e)}")
-        
-        # Проверяем каждые 15 минут
-        time.sleep(900)
-
-# Обновляем функцию run_bot для запуска периодической проверки подписок
-def run_bot():
-    try:
-        logger.info("Запуск бота...")
-        
-        # Проверяем наличие токена
-        if not BOT_TOKEN:
-            logger.error("Не указан токен бота (BOT_TOKEN). Бот не будет запущен.")
-            return
-            
-        if not CHANNEL_ID:
-            logger.warning("Не указан ID канала (CHANNEL_ID). Функции работы с каналом будут недоступны.")
-        
-        # Обновляем структуру БД
-        update_db_structure()
-        
-        # Запускаем периодическую проверку платежей в отдельном потоке
-        payment_thread = threading.Thread(target=check_payments_periodically)
-        payment_thread.daemon = True
-        payment_thread.start()
-        
-        # Запускаем периодическую проверку подписок в отдельном потоке
-        subscription_thread = threading.Thread(target=check_subscriptions_periodically)
-        subscription_thread.daemon = True
-        subscription_thread.start()
-        
-        # Запускаем бота
-        bot.polling(none_stop=True, interval=0)
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {str(e)}", exc_info=True)
-
-# Запуск бота в отдельном потоке
-if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Держим основной поток активным
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен")
-
-# Добавляем после других обработчиков команд
 
 @bot.message_handler(commands=['test_payment'])
 def test_payment_command(message):
@@ -1186,3 +1020,106 @@ def test_failed_payment_command(message):
         conn.close()
         bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
         logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
+
+# Обработчик текстовых сообщений должен быть последним
+@bot.message_handler(content_types=['text'])
+def text_handler(message):
+    if message.text == 'Оформить подписку':
+        subscribe_command(message)
+    elif message.text == 'Статус подписки':
+        status_command(message)
+    else:
+        # Проверяем, является ли сообщение командой
+        if message.text.startswith('/'):
+            bot.reply_to(message, "Неизвестная команда. Доступные команды: /start, /subscribe, /status")
+        else:
+            bot.reply_to(message, "Используйте кнопки или команды /start, /subscribe, /status")
+
+# Функция для периодической проверки новых платежей
+def check_payments_periodically():
+    while True:
+        try:
+            # Проверяем существование таблицы перед запросом
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
+            table_exists = cursor.fetchone()
+            conn.close()
+            
+            if table_exists:
+                check_new_payments()
+            else:
+                logger.warning("Таблица payments еще не создана. Пропускаем проверку платежей.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
+        
+        # Проверяем каждые 60 секунд
+        time.sleep(60)
+
+# Обновляем функцию проверки подписок
+def check_subscriptions_periodically():
+    while True:
+        try:
+            # Проверяем существование таблицы перед запросом
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payments'")
+            table_exists = cursor.fetchone()
+            conn.close()
+            
+            if table_exists:
+                check_subscription_expiration()
+                logger.info("Выполнена проверка активных подписок")
+            else:
+                logger.warning("Таблица payments еще не создана. Пропускаем проверку подписок.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при периодической проверке подписок: {str(e)}")
+        
+        # Проверяем каждые 15 минут
+        time.sleep(900)
+
+# Обновляем функцию run_bot для запуска периодической проверки подписок
+def run_bot():
+    try:
+        logger.info("Запуск бота...")
+        
+        # Проверяем наличие токена
+        if not BOT_TOKEN:
+            logger.error("Не указан токен бота (BOT_TOKEN). Бот не будет запущен.")
+            return
+            
+        if not CHANNEL_ID:
+            logger.warning("Не указан ID канала (CHANNEL_ID). Функции работы с каналом будут недоступны.")
+        
+        # Обновляем структуру БД
+        update_db_structure()
+        
+        # Запускаем периодическую проверку платежей в отдельном потоке
+        payment_thread = threading.Thread(target=check_payments_periodically)
+        payment_thread.daemon = True
+        payment_thread.start()
+        
+        # Запускаем периодическую проверку подписок в отдельном потоке
+        subscription_thread = threading.Thread(target=check_subscriptions_periodically)
+        subscription_thread.daemon = True
+        subscription_thread.start()
+        
+        # Запускаем бота
+        bot.polling(none_stop=True, interval=0)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {str(e)}", exc_info=True)
+
+# Запуск бота в отдельном потоке
+if __name__ == "__main__":
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Держим основной поток активным
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен")
