@@ -965,7 +965,7 @@ def cancel_subscription_callback(call):
         if not call.data.endswith('_confirmed'):
             end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
             
-            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup = types.InlineKeyboardMarkup(row_width=1)
             btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
                                                    callback_data=f"cancel_{contract_id}_confirmed")
             btn_back = types.InlineKeyboardButton('🔙 Нет, вернуться', 
@@ -975,7 +975,7 @@ def cancel_subscription_callback(call):
             bot.edit_message_text(
                 f"⚠️ Вы уверены, что хотите отписаться?\n\n"
                 f"При отписке доступ к каналу останется до {end_date_str}.\n"
-                f"После этой даты автопродление будет отключено.",
+                f"Автопродление будет отключено.",
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
                 reply_markup=markup
@@ -993,7 +993,7 @@ def cancel_subscription_callback(call):
             bot.edit_message_text(
                 f"✅ Автопродление подписки отключено.\n\n"
                 f"Доступ к каналу сохранится до {end_date_str}.\n"
-                f"После этой даты вы сможете оформить новую подписку.",
+                f"После этой даты вы сможете оформить новую подписку. Мы всегда рады видеть Вас снова!",
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
                 reply_markup=markup
