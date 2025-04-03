@@ -34,11 +34,20 @@ security = HTTPBasic()
 USERNAME = os.getenv("WEBHOOK_USERNAME", "admin")
 PASSWORD = os.getenv("WEBHOOK_PASSWORD", "password")
 DB_PATH = DATA_DIR / "lava_payments.db"
-MAIN_MESSAGE = os.getenv("MAIN_MESSAGE", 
+
+# В начале файла, где определяются другие переменные окружения
+default_message = (
     "👋 Добро пожаловать!\n\n"
     "Этот бот поможет вам управлять подпиской на закрытый канал.\n"
     "Выберите действие из меню ниже:"
-).replace('\\n', '\n')
+)
+
+try:
+    # Пытаемся распарсить строку как JSON для корректной обработки escape-последовательностей
+    MAIN_MESSAGE = json.loads(f'"{os.getenv("MAIN_MESSAGE", default_message)}"')
+except:
+    # Если не получилось, используем как есть
+    MAIN_MESSAGE = os.getenv("MAIN_MESSAGE", default_message)
 
 # Модели данных
 class Product(BaseModel):
