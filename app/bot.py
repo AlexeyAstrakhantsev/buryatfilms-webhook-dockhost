@@ -1023,265 +1023,203 @@ def process_payment_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
-@bot.message_handler(commands=['test_payment'])
-def test_payment_command(message):
-    # Проверяем, что команду отправил администратор
-    if str(message.from_user.id) != ADMIN_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору")
-        return
-    
-    # Проверяем, есть ли ID пользователя в сообщении
-    args = message.text.split()
-    if len(args) > 1:
-        try:
-            user_id = int(args[1])
-        except ValueError:
-            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
-            return
-    else:
-        user_id = message.from_user.id
-    
-    # Создаем тестовый платеж
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Текущее время в формате ISO
-    current_time = datetime.utcnow().isoformat() + 'Z'
-    
-    # Тестовые данные платежа
-    test_payment = {
-        'event_type': 'payment.success',
-        'product_id': 'test_product',
-        'product_title': 'Тестовая подписка',
-        'buyer_email': f"{user_id}@t.me",
-        'contract_id': f"test_{int(time.time())}",
-        'parent_contract_id': None,
-        'amount': 100,
-        'currency': 'RUB',
-        'timestamp': current_time,
-        'status': 'active',
-        'error_message': None,
-        'raw_data': json.dumps({
-            'periodicity': 'MONTHLY',
-            'test_payment': True
-        })
-    }
-    
+@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
+def process_currency_callback(call):
     try:
-        # Добавляем тестовый платеж в БД
-        cursor.execute('''
-        INSERT INTO payments (
-            event_type, product_id, product_title, buyer_email,
-            contract_id, parent_contract_id, amount, currency,
-            timestamp, status, error_message, raw_data, received_at, processed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ''', (
-            test_payment['event_type'],
-            test_payment['product_id'],
-            test_payment['product_title'],
-            test_payment['buyer_email'],
-            test_payment['contract_id'],
-            test_payment['parent_contract_id'],
-            test_payment['amount'],
-            test_payment['currency'],
-            test_payment['timestamp'],
-            test_payment['status'],
-            test_payment['error_message'],
-            test_payment['raw_data'],
-            current_time
-        ))
+        # Получаем ID пользователя из callback
+        user_id = call.from_user.id
+        logger.info(f"Обработка выбора валюты для пользователя {user_id}")
         
-        conn.commit()
-        conn.close()
+        # Разбираем данные из callback
+        parts = call.data.split('|')
+        if len(parts) != 4:
+            raise ValueError("Неверный формат данных callback")
         
-        bot.reply_to(message, 
-            f"Тестовый платеж создан успешно для пользователя {user_id}!\n"
-            "Бот должен обработать его в течение минуты.\n"
-            "Используйте /status для проверки статуса подписки."
+        _, offer_id, periodicity, currency = parts
+        logger.info(f"Параметры платежа: offer_id={offer_id}, periodicity={periodicity}, currency={currency}")
+        
+        # Создаем ссылку на оплату
+        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
+        logger.info(f"Получены данные для оплаты: {payment_data}")
+        
+        if not payment_data:
+            raise ValueError("Не удалось создать ссылку на оплату")
+        
+        # Получаем ссылку из ответа
+        payment_url = payment_data.get('paymentUrl')
+        if not payment_url:
+            raise ValueError("В ответе отсутствует ссылка на оплату")
+        
+        logger.info(f"Создана ссылка на оплату: {payment_url}")
+        
+        # Создаем клавиатуру с кнопками
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
+        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
+        markup.add(pay_button)
+        markup.add(back_button)
+        
+        # Отправляем сообщение с кнопкой оплаты
+        bot.edit_message_text(
+            "Для оплаты подписки нажмите на кнопку ниже:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
         )
         
-        logger.info(f"Создан тестовый платеж для пользователя {user_id}")
+        # Отмечаем callback как обработанный
+        bot.answer_callback_query(call.id)
+        
+        # Логируем успешное создание ссылки
+        logger.info(f"Успешно создана ссылка на оплату для пользователя {user_id}")
         
     except Exception as e:
-        conn.rollback()
-        conn.close()
-        bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
-        logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
-
-# Добавляем команду для эмуляции неуспешного платежа
-@bot.message_handler(commands=['test_failed_payment'])
-def test_failed_payment_command(message):
-    # Проверяем, что команду отправил администратор
-    if str(message.from_user.id) != ADMIN_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору")
-        return
-    
-    # Проверяем, есть ли ID пользователя в сообщении
-    args = message.text.split()
-    if len(args) > 1:
-        try:
-            user_id = int(args[1])
-        except ValueError:
-            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
-            return
-    else:
-        user_id = message.from_user.id
-    
-    # Создаем тестовый неуспешный платеж
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    current_time = datetime.utcnow().isoformat() + 'Z'
-    
-    test_payment = {
-        'event_type': 'payment.failed',
-        'product_id': 'test_product',
-        'product_title': 'Тестовая подписка',
-        'buyer_email': f"{user_id}@t.me",
-        'contract_id': f"test_failed_{int(time.time())}",
-        'parent_contract_id': None,
-        'amount': 100,
-        'currency': 'RUB',
-        'timestamp': current_time,
-        'status': 'failed',
-        'error_message': 'Тестовая ошибка оплаты',
-        'raw_data': json.dumps({
-            'periodicity': 'MONTHLY',
-            'test_payment': True
-        })
-    }
-    
-    try:
-        cursor.execute('''
-        INSERT INTO payments (
-            event_type, product_id, product_title, buyer_email,
-            contract_id, parent_contract_id, amount, currency,
-            timestamp, status, error_message, raw_data, received_at, processed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ''', (
-            test_payment['event_type'],
-            test_payment['product_id'],
-            test_payment['product_title'],
-            test_payment['buyer_email'],
-            test_payment['contract_id'],
-            test_payment['parent_contract_id'],
-            test_payment['amount'],
-            test_payment['currency'],
-            test_payment['timestamp'],
-            test_payment['status'],
-            test_payment['error_message'],
-            test_payment['raw_data'],
-            current_time
-        ))
-        
-        conn.commit()
-        conn.close()
-        
-        bot.reply_to(message, 
-            f"Тестовый неуспешный платеж создан для пользователя {user_id}!\n"
-            "Бот должен обработать его в течение минуты.\n"
-            "Используйте /status для проверки статуса."
+        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}", exc_info=True)
+        bot.answer_callback_query(
+            call.id,
+            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
         )
-        
-        logger.info(f"Создан тестовый неуспешный платеж для пользователя {user_id}")
-        
-    except Exception as e:
-        conn.rollback()
-        conn.close()
-        bot.reply_to(message, f"Ошибка при создании тестового платежа: {str(e)}")
-        logger.error(f"Ошибка при создании тестового платежа: {str(e)}")
 
-# Добавляем команду для тестирования истечения подписки
-@bot.message_handler(commands=['test_expire'])
-def test_expire_command(message):
-    # Проверяем, что команду отправил администратор
-    if str(message.from_user.id) != ADMIN_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору")
+@bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_stats')
+def show_detailed_stats(call):
+    if str(call.from_user.id) != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Эта функция доступна только администратору")
         return
-    
-    # Проверяем, есть ли ID пользователя в сообщении
-    args = message.text.split()
-    if len(args) > 1:
-        try:
-            user_id = int(args[1])
-        except ValueError:
-            bot.reply_to(message, "Неверный формат ID пользователя. Используйте числовой ID.")
-            return
-    else:
-        user_id = message.from_user.id
     
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Создаем тестовый платеж с истекшей датой
-        current_time = (datetime.utcnow() - timedelta(days=31)).isoformat() + 'Z'
-        
-        test_payment = {
-            'event_type': 'payment.success',
-            'product_id': 'test_product',
-            'product_title': 'Тестовая подписка',
-            'buyer_email': f"{user_id}@t.me",
-            'contract_id': f"test_expired_{int(time.time())}",
-            'parent_contract_id': None,
-            'amount': 100,
-            'currency': 'RUB',
-            'timestamp': current_time,
-            'status': 'active',
-            'error_message': None,
-            'raw_data': json.dumps({
-                'periodicity': 'MONTHLY',
-                'test_payment': True
-            })
-        }
-        
-        # Добавляем тестовый платеж в БД
+        # Получаем активных пользователей с деталями
         cursor.execute('''
-        INSERT INTO payments (
-            event_type, product_id, product_title, buyer_email,
-            contract_id, parent_contract_id, amount, currency,
-            timestamp, status, error_message, raw_data, received_at, processed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-        ''', (
-            test_payment['event_type'],
-            test_payment['product_id'],
-            test_payment['product_title'],
-            test_payment['buyer_email'],
-            test_payment['contract_id'],
-            test_payment['parent_contract_id'],
-            test_payment['amount'],
-            test_payment['currency'],
-            test_payment['timestamp'],
-            test_payment['status'],
-            test_payment['error_message'],
-            test_payment['raw_data'],
-            current_time
-        ))
-        
-        # Обновляем или добавляем запись в channel_members
-        cursor.execute('''
-        INSERT OR REPLACE INTO channel_members 
-        (user_id, status, subscription_end_date, last_payment_id)
-        VALUES (?, 'active', ?, last_insert_rowid())
-        ''', (user_id, (datetime.fromisoformat(current_time.replace('Z', '+00:00')) + timedelta(days=30)).isoformat()))
-        
-        conn.commit()
-        conn.close()
-        
-        bot.reply_to(message, 
-            f"Создана тестовая истекшая подписка для пользователя {user_id}!\n"
-            "Бот должен удалить пользователя при следующей проверке подписок (в течение 15 минут).\n"
-            "Используйте /status для проверки статуса подписки."
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                event_type,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+            WHERE event_type IN ('payment.success', 'subscription.recurring.payment.success')
         )
+        SELECT 
+            REPLACE(buyer_email, '@t.me', '') as user_id,
+            status,
+            timestamp,
+            event_type
+        FROM LastPayments
+        WHERE rn = 1
+        ORDER BY timestamp DESC
+        LIMIT 50
+        ''')
         
-        logger.info(f"Создана тестовая истекшая подписка для пользователя {user_id}")
+        active_users = cursor.fetchall()
+        
+        # Формируем подробный отчет
+        detailed_stats = "📋 <b>Подробная статистика по пользователям</b>\n\n"
+        
+        for user in active_users:
+            user_id = user[0]
+            status = user[1]
+            timestamp = datetime.fromisoformat(user[2].replace('Z', '+00:00')).strftime("%d.%m.%Y %H:%M")
+            event_type = "🔄 Продление" if 'recurring' in user[3] else "💳 Первая оплата"
+            
+            status_emoji = "✅" if status in ['subscription-active', 'active'] else "❌"
+            
+            detailed_stats += (
+                f"{status_emoji} <a href='tg://user?id={user_id}'>Пользователь {user_id}</a>\n"
+                f"Статус: {status}\n"
+                f"Последнее событие: {event_type}\n"
+                f"Дата: {timestamp}\n"
+                "➖➖➖➖➖➖➖➖➖➖\n"
+            )
+        
+        # Разбиваем на части, если сообщение слишком длинное
+        if len(detailed_stats) > 4096:
+            for x in range(0, len(detailed_stats), 4096):
+                part = detailed_stats[x:x+4096]
+                bot.send_message(
+                    call.message.chat.id,
+                    part,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+        else:
+            bot.send_message(
+                call.message.chat.id,
+                detailed_stats,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+        
+        bot.answer_callback_query(call.id)
         
     except Exception as e:
-        if conn:
-            conn.rollback()
-            conn.close()
-        bot.reply_to(message, f"Ошибка при создании тестовой истекшей подписки: {str(e)}")
-        logger.error(f"Ошибка при создании тестовой истекшей подписки: {str(e)}")
+        logger.error(f"Ошибка при получении подробной статистики: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка при получении статистики")
+    finally:
+        conn.close()
+
+@bot.message_handler(commands=['stat'])
+def stat_command(message):
+    # Проверяем, что команду отправил администратор
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем общую статистику
+        cursor.execute('''
+        SELECT 
+            COUNT(DISTINCT buyer_email) as total_users,
+            COUNT(DISTINCT CASE WHEN event_type = 'payment.success' THEN buyer_email END) as unique_paid,
+            COUNT(DISTINCT CASE WHEN event_type = 'subscription.recurring.payment.success' THEN buyer_email END) as unique_renewed,
+            COUNT(CASE WHEN event_type = 'payment.success' THEN 1 END) as total_payments,
+            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.success' THEN 1 END) as total_renewals,
+            COUNT(CASE WHEN event_type = 'payment.failed' THEN 1 END) as failed_payments,
+            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.failed' THEN 1 END) as failed_renewals
+        FROM payments
+        ''')
+        
+        stats = cursor.fetchone()
+        
+        # Получаем количество активных подписок
+        cursor.execute('''
+        SELECT COUNT(*) 
+        FROM channel_members 
+        WHERE status = 'active'
+        ''')
+        active_subs = cursor.fetchone()[0]
+        
+        # Формируем краткую статистику
+        summary = (
+            "📊 <b>Статистика подписок</b>\n\n"
+            f"👥 Всего пользователей: {stats[0]}\n"
+            f"✅ Активных подписок: {active_subs}\n"
+            f"💳 Уникальных оплат: {stats[1]}\n"
+            f"🔄 Уникальных продлений: {stats[2]}\n"
+            f"📈 Всего успешных оплат: {stats[3]}\n"
+            f"📊 Всего успешных продлений: {stats[4]}\n"
+            f"❌ Неудачных оплат: {stats[5]}\n"
+            f"⚠️ Неудачных продлений: {stats[6]}\n\n"
+            "Для подробной информации нажмите кнопку ниже:"
+        )
+        
+        # Создаем клавиатуру
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_details = types.InlineKeyboardButton('📋 Подробная статистика', callback_data='show_detailed_stats')
+        markup.add(btn_details)
+        
+        bot.reply_to(message, summary, parse_mode="HTML", reply_markup=markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {str(e)}")
+        bot.reply_to(message, "❌ Произошла ошибка при получении статистики")
+    finally:
+        conn.close()
 
 # Обработчик текстовых сообщений должен быть последним
 @bot.message_handler(content_types=['text'])
@@ -1339,7 +1277,6 @@ def text_handler(message):
                     "/status - проверить статус подписки"
                 ])
             )
-
 
 # Функция для периодической проверки новых платежей
 def check_payments_periodically():
@@ -1429,202 +1366,3 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
-
-@bot.message_handler(commands=['stat'])
-def stat_command(message):
-    # Проверяем, что команду отправил администратор
-    if str(message.from_user.id) != ADMIN_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору")
-        return
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Получаем общую статистику
-        cursor.execute('''
-        SELECT 
-            COUNT(DISTINCT buyer_email) as total_users,
-            COUNT(DISTINCT CASE WHEN event_type = 'payment.success' THEN buyer_email END) as unique_paid,
-            COUNT(DISTINCT CASE WHEN event_type = 'subscription.recurring.payment.success' THEN buyer_email END) as unique_renewed,
-            COUNT(CASE WHEN event_type = 'payment.success' THEN 1 END) as total_payments,
-            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.success' THEN 1 END) as total_renewals,
-            COUNT(CASE WHEN event_type = 'payment.failed' THEN 1 END) as failed_payments,
-            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.failed' THEN 1 END) as failed_renewals
-        FROM payments
-        ''')
-        
-        stats = cursor.fetchone()
-        
-        # Получаем количество активных подписок
-        cursor.execute('''
-        SELECT COUNT(*) 
-        FROM channel_members 
-        WHERE status = 'active'
-        ''')
-        active_subs = cursor.fetchone()[0]
-        
-        # Формируем краткую статистику
-        summary = (
-            "📊 <b>Статистика подписок</b>\n\n"
-            f"👥 Всего пользователей: {stats[0]}\n"
-            f"✅ Активных подписок: {active_subs}\n"
-            f"💳 Уникальных оплат: {stats[1]}\n"
-            f"🔄 Уникальных продлений: {stats[2]}\n"
-            f"📈 Всего успешных оплат: {stats[3]}\n"
-            f"📊 Всего успешных продлений: {stats[4]}\n"
-            f"❌ Неудачных оплат: {stats[5]}\n"
-            f"⚠️ Неудачных продлений: {stats[6]}\n\n"
-            "Для подробной информации нажмите кнопку ниже:"
-        )
-        
-        # Создаем клавиатуру
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_details = types.InlineKeyboardButton('📋 Подробная статистика', callback_data='show_detailed_stats')
-        markup.add(btn_details)
-        
-        bot.reply_to(message, summary, parse_mode="HTML", reply_markup=markup)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении статистики: {str(e)}")
-        bot.reply_to(message, "❌ Произошла ошибка при получении статистики")
-    finally:
-        conn.close()
-
-# Обработчик для подробной статистики
-@bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_stats')
-def show_detailed_stats(call):
-    if str(call.from_user.id) != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Эта функция доступна только администратору")
-        return
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Получаем активных пользователей с деталями
-        cursor.execute('''
-        WITH LastPayments AS (
-            SELECT 
-                buyer_email,
-                status,
-                timestamp,
-                event_type,
-                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
-            FROM payments
-            WHERE event_type IN ('payment.success', 'subscription.recurring.payment.success')
-        )
-        SELECT 
-            REPLACE(buyer_email, '@t.me', '') as user_id,
-            status,
-            timestamp,
-            event_type
-        FROM LastPayments
-        WHERE rn = 1
-        ORDER BY timestamp DESC
-        LIMIT 50
-        ''')
-        
-        active_users = cursor.fetchall()
-        
-        # Формируем подробный отчет
-        detailed_stats = "📋 <b>Подробная статистика по пользователям</b>\n\n"
-        
-        for user in active_users:
-            user_id = user[0]
-            status = user[1]
-            timestamp = datetime.fromisoformat(user[2].replace('Z', '+00:00')).strftime("%d.%m.%Y %H:%M")
-            event_type = "🔄 Продление" if 'recurring' in user[3] else "💳 Первая оплата"
-            
-            status_emoji = "✅" if status in ['subscription-active', 'active'] else "❌"
-            
-            detailed_stats += (
-                f"{status_emoji} <a href='tg://user?id={user_id}'>Пользователь {user_id}</a>\n"
-                f"Статус: {status}\n"
-                f"Последнее событие: {event_type}\n"
-                f"Дата: {timestamp}\n"
-                "➖➖➖➖➖➖➖➖➖➖\n"
-            )
-        
-        # Разбиваем на части, если сообщение слишком длинное
-        if len(detailed_stats) > 4096:
-            for x in range(0, len(detailed_stats), 4096):
-                part = detailed_stats[x:x+4096]
-                bot.send_message(
-                    call.message.chat.id,
-                    part,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-        else:
-            bot.send_message(
-                call.message.chat.id,
-                detailed_stats,
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
-        
-        bot.answer_callback_query(call.id)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении подробной статистики: {str(e)}")
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка при получении статистики")
-    finally:
-        conn.close()
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
-def process_currency_callback(call):
-    try:
-        # Получаем ID пользователя из callback
-        user_id = call.from_user.id
-        logger.info(f"Обработка выбора валюты для пользователя {user_id}")
-        
-        # Разбираем данные из callback
-        parts = call.data.split('|')
-        if len(parts) != 4:
-            raise ValueError("Неверный формат данных callback")
-        
-        _, offer_id, periodicity, currency = parts
-        logger.info(f"Параметры платежа: offer_id={offer_id}, periodicity={periodicity}, currency={currency}")
-        
-        # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
-        logger.info(f"Получены данные для оплаты: {payment_data}")
-        
-        if not payment_data:
-            raise ValueError("Не удалось создать ссылку на оплату")
-        
-        # Получаем ссылку из ответа
-        payment_url = payment_data.get('paymentUrl')
-        if not payment_url:
-            raise ValueError("В ответе отсутствует ссылка на оплату")
-        
-        logger.info(f"Создана ссылка на оплату: {payment_url}")
-        
-        # Создаем клавиатуру с кнопками
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
-        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
-        markup.add(pay_button)
-        markup.add(back_button)
-        
-        # Отправляем сообщение с кнопкой оплаты
-        bot.edit_message_text(
-            "Для оплаты подписки нажмите на кнопку ниже:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-        
-        # Отмечаем callback как обработанный
-        bot.answer_callback_query(call.id)
-        
-        # Логируем успешное создание ссылки
-        logger.info(f"Успешно создана ссылка на оплату для пользователя {user_id}")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}", exc_info=True)
-        bot.answer_callback_query(
-            call.id,
-            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
-        )
