@@ -571,20 +571,28 @@ def start_command(message):
     )
 
 # Обработчик для inline-кнопок основного меню
-@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu', 'back_to_periods'])
+@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu'])
 def process_main_menu(call):
     try:
-        if call.data == 'show_subscribe' or call.data == 'back_to_periods':
+        if call.data == 'show_subscribe':
             subscribe_command(call.message)
         elif call.data == 'show_status':
             status_command(call.message)
         elif call.data == 'show_support':
-            support_handler(call.message)
+            if SUPPORT_USERNAME:
+                bot.answer_callback_query(
+                    call.id,
+                    "Перенаправляем в чат поддержки...",
+                    show_alert=False
+                )
+            else:
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Извините, служба поддержки временно недоступна",
+                    show_alert=True
+                )
         elif call.data == 'show_menu':
             show_main_menu(call.message)
-        
-        # Отмечаем callback как обработанный
-        bot.answer_callback_query(call.id)
         
     except Exception as e:
         logger.error(f"Ошибка при обработке кнопки меню: {str(e)}")
@@ -601,7 +609,7 @@ def show_main_menu(message):
         # Кнопки для активной подписки
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
         btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
-        btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
         markup.add(btn_status)
         markup.add(btn_channel)
         markup.add(btn_support)
@@ -609,7 +617,7 @@ def show_main_menu(message):
         # Кнопки для неактивной подписки
         btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
-        btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
         markup.add(btn_subscribe)
         markup.add(btn_status)
         markup.add(btn_support)
