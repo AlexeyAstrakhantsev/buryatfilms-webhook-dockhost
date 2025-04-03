@@ -35,13 +35,8 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя польз
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылка на канал
 
 # В начале файла, где определяются другие константы
-default_message = """👋 Амар мэндээ!
-
-Этот бот поможет тебе попасть в канал с бурятскими мультфильмами и сериалами.
-
-Подписка - ежемесячная, оплату принимаем в любой валюте.
-
-Отписаться можно в любой момент 🤝"""
+default_message = """Добро пожаловать в канал с бурятскими мультфильмами и сериалами.
+"""
 
 # Получаем сообщение из переменной окружения или используем значение по умолчанию
 MAIN_MESSAGE = os.getenv("MAIN_MESSAGE", default_message).replace('\\n', '\n')
@@ -67,39 +62,6 @@ NOTIFY_BEFORE_DAYS = [7, 3, 1]  # За сколько дней уведомля�
 # Инициализация бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
-@bot.message_handler(commands=['subscribe'])
-def subscribe_command(message):
-    # Правильно получаем ID пользователя
-    user_id = message.from_user.id
-    username = message.from_user.username or f"user_{user_id}"
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
-   
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
-    if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        try:
-            bot.edit_message_text(
-                "У вас уже есть активная подписка!",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=markup
-            )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
-    
-    show_subscription_menu(message)
 
 # Функция для получения списка доступных подписок
 def get_available_subscriptions():
@@ -498,7 +460,16 @@ def show_subscription_menu(message):
             period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
             rub_amount = price["currencies"].get("RUB", 0)
             button_text = f"{period_text} - {rub_amount} ₽"
-            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
+            
+            # Сокращаем periodicity для callback_data
+            short_period = {
+                "MONTHLY": "1m",
+                "PERIOD_90_DAYS": "3m",
+                "PERIOD_180_DAYS": "6m",
+                "PERIOD_YEAR": "1y"
+            }.get(price["periodicity"], price["periodicity"])
+            
+            callback_data = f"p|{sub['offer_id']}|{short_period}"
             markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
         
         # Добавляем кнопку возврата в меню
@@ -506,7 +477,6 @@ def show_subscription_menu(message):
         
         message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
         
-        # Пытаемся отредактировать существующее сообщение
         try:
             bot.edit_message_text(
                 message_text,
@@ -516,13 +486,47 @@ def show_subscription_menu(message):
                 parse_mode="HTML"
             )
         except Exception as e:
-            # Если не получилось отредактировать, отправляем новое
             bot.send_message(
                 message.chat.id,
                 message_text,
                 reply_markup=markup,
                 parse_mode="HTML"
             )
+
+
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    # Правильно получаем ID пользователя
+    user_id = message.from_user.id
+    username = message.from_user.username or f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+   
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
+            )
+        return
+    
+    show_subscription_menu(message)
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -537,7 +541,7 @@ def start_command(message):
     # Основные кнопки
     btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
     btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
-    btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
     
     # Добавляем кнопки в клавиатуру
     markup.add(btn_subscribe)
@@ -938,7 +942,7 @@ def cancel_subscription_callback(call):
             "❌ Произошла ошибка при отмене подписки"
         )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('pay|'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('p|'))
 def process_payment_callback(call):
     try:
         # Получаем ID пользователя из callback
@@ -949,7 +953,16 @@ def process_payment_callback(call):
         if len(parts) != 3:
             raise ValueError("Неверный формат данных callback")
         
-        _, offer_id, periodicity = parts
+        _, offer_id, short_period = parts
+        
+        # Преобразуем короткий период обратно в полный
+        period_map = {
+            "1m": "MONTHLY",
+            "3m": "PERIOD_90_DAYS",
+            "6m": "PERIOD_180_DAYS",
+            "1y": "PERIOD_YEAR"
+        }
+        periodicity = period_map.get(short_period, short_period)
         
         # Получаем информацию о подписке для отображения цен
         subscriptions = get_available_subscriptions()

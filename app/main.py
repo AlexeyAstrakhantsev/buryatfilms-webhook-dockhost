@@ -159,7 +159,7 @@ async def startup_event():
 async def root(_: str = Depends(verify_credentials)):
     return {"status": "ok", "message": "Lava.top webhook service is running"}
 
-@app.post("/webhook/lava")
+@app.post("/lava/payment")
 async def lava_webhook(request: Request, username: str = Depends(verify_credentials)):
     try:
         # Получаем тело запроса
