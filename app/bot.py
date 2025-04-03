@@ -201,7 +201,35 @@ def check_subscription_status(user_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Получаем последний активный платеж пользователя
+        # Сначала проверяем статус в channel_members
+        cursor.execute('''
+        SELECT status, subscription_end_date, last_payment_id
+        FROM channel_members
+        WHERE user_id = ? AND status = 'active'
+        ''', (user_id,))
+        
+        member = cursor.fetchone()
+        
+        if member:
+            status, end_date, last_payment_id = member
+            
+            # Проверяем, не истекла ли подписка
+            if end_date and datetime.fromisoformat(end_date) > datetime.now(timezone.utc):
+                # Получаем дополнительную информацию о платеже
+                cursor.execute('''
+                SELECT status, timestamp, event_type
+                FROM payments
+                WHERE id = ?
+                ''', (last_payment_id,))
+                payment = cursor.fetchone()
+                
+                return {
+                    "status": "active",
+                    "end_date": end_date,
+                    "data": payment
+                }
+        
+        # Если нет активной записи в channel_members, проверяем последний платеж
         cursor.execute('''
         SELECT p.status, p.timestamp, p.event_type, cm.subscription_end_date
         FROM payments p
