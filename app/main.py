@@ -180,6 +180,7 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
         cursor.execute("DROP TABLE IF EXISTS channel_members")
         
         # Пересоздаем таблицы
+        # Создаем таблицу payments, если её нет
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,12 +201,14 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
         )
         ''')
         
+        # Создаем таблицу channel_members, если её нет
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS channel_members (
             user_id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             joined_at TEXT NOT NULL,
-            expires_at TEXT
+            expires_at TEXT,
+            subscription_end_date TEXT
         )
         ''')
         
