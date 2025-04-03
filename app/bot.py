@@ -62,6 +62,9 @@ def subscribe_command(message):
     user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
     username = message.from_user.username if hasattr(message, 'from_user') else None
     
+    user_id = message.from_user.id
+    username = message.from_user.username or f"user_{user_id}"
+
     logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
     
     # Проверяем, есть ли уже активная подписка

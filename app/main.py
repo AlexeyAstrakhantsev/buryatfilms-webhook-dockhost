@@ -167,4 +167,57 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
     
     except Exception as e:
         logger.error(f"Ошибка при обработке веб-хука: {str(e)}", exc_info=True)
-        return {"status": "error", "message": str(e)} 
+        return {"status": "error", "message": str(e)}
+
+@app.post("/admin/reset_db")
+async def reset_database(request: Request, username: str = Depends(verify_credentials)):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Удаляем все таблицы
+        cursor.execute("DROP TABLE IF EXISTS payments")
+        cursor.execute("DROP TABLE IF EXISTS channel_members")
+        
+        # Пересоздаем таблицы
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            product_title TEXT NOT NULL,
+            buyer_email TEXT NOT NULL,
+            contract_id TEXT NOT NULL,
+            parent_contract_id TEXT,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            raw_data TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            processed INTEGER DEFAULT 0
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channel_members (
+            user_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            joined_at TEXT NOT NULL,
+            expires_at TEXT
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info("База данных успешно сброшена администратором")
+        return {"status": "success", "message": "База данных успешно сброшена"}
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе базы данных: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        ) 
