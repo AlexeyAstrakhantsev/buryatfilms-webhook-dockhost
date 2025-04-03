@@ -56,6 +56,40 @@ NOTIFY_BEFORE_DAYS = [7, 3, 1]  # За сколько дней уведомля�
 # Инициализация бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    # Правильно получаем ID пользователя
+    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
+    username = message.from_user.username if hasattr(message, 'from_user') else None
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+    
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
+            )
+        return
+    
+    show_subscription_menu(message)
+
 # Функция для получения списка доступных подписок
 def get_available_subscriptions():
     url = "https://gate.lava.top/api/v2/products"
@@ -1306,45 +1340,6 @@ def text_handler(message):
                 ])
             )
 
-# Функция для обработки кнопки "Поддержка"
-def support_handler(message):
-    if not SUPPORT_USERNAME:
-        bot.reply_to(message, "❌ Извините, служба поддержки временно недоступна")
-        logger.error("Не указан username службы поддержки (SUPPORT_USERNAME)")
-        return
-    
-    support_link = f"https://t.me/{SUPPORT_USERNAME}"
-    
-    # Создаем inline-клавиатуру
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    support_button = types.InlineKeyboardButton(
-        text="💬 Написать в поддержку",
-        url=support_link
-    )
-    menu_button = types.InlineKeyboardButton(
-        text="🔙 Главное меню",
-        callback_data="show_menu"
-    )
-    markup.add(support_button, menu_button)
-    
-    # Отправляем или редактируем сообщение
-    if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-        bot.edit_message_text(
-            "📞 Служба поддержки всегда готова помочь вам!\n\n"
-            "Нажмите на кнопку ниже, чтобы связаться с нами:",
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=markup
-        )
-    else:
-        bot.send_message(
-            message.chat.id,
-            "📞 Служба поддержки всегда готова помочь вам!\n\n"
-            "Нажмите на кнопку ниже, чтобы связаться с нами:",
-            reply_markup=markup
-        )
-    
-    logger.info(f"Пользователь {message.from_user.id} запросил контакт поддержки")
 
 # Функция для периодической проверки новых платежей
 def check_payments_periodically():
