@@ -385,7 +385,7 @@ def notify_admin(message):
         logger.error(f"Ошибка при отправке уведомления администратору: {str(e)}")
         return False
 
-# Обновляем функцию check_new_payments для отправки уведомлений администратору
+# Функция check_new_payments для проверки новых платежей
 def check_new_payments():
     try:
         conn = sqlite3.connect(DB_PATH, timeout=20)  # Увеличиваем timeout
@@ -502,8 +502,7 @@ def check_new_payments():
     finally:
         conn.close()
 
-# Обработчики команд должны быть перед обработчиком текстовых сообщений
-
+# Функция для показа меню выбора периода подписки
 def show_subscription_menu(message):
     """
     Показывает меню выбора периода подписки
@@ -572,7 +571,7 @@ def show_subscription_menu(message):
                 parse_mode="HTML"
             )
 
-
+# Обработчик для команды /subscribe
 @bot.message_handler(commands=['subscribe'])
 def subscribe_command(message):
     # Правильно получаем ID пользователя
@@ -607,6 +606,7 @@ def subscribe_command(message):
     
     show_subscription_menu(message)
 
+# Обработчик для команды /start
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -798,7 +798,7 @@ def calculate_days_left(timestamp, periodicity):
     
     return max(0, days_left)  # Возвращаем 0, если подписка уже закончилась
 
-# Обновляем функцию проверки подписок
+# Функция для проверки сроков подписок
 def check_subscription_expiration():
     try:
         logger.debug("Начало проверки сроков подписок")
@@ -904,7 +904,7 @@ def check_subscription_expiration():
     except Exception as e:
         logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
 
-# Обновляем функцию status_command
+# Обработчик для команды /status
 @bot.message_handler(commands=['status'])
 def status_command(message):
     try:
@@ -1030,6 +1030,7 @@ def cancel_subscription_callback(call):
             "❌ Произошла ошибка при отмене подписки"
         )
 
+# Обработчик для выбора периода оплаты
 @bot.callback_query_handler(func=lambda call: call.data.startswith('p|'))
 def process_payment_callback(call):
     try:
@@ -1094,6 +1095,7 @@ def process_payment_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
+# Обработчик для выбора валюты оплаты
 @bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
 def process_currency_callback(call):
     try:
@@ -1151,6 +1153,7 @@ def process_currency_callback(call):
             "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
         )
 
+# Обработчик для показа подробной статистики
 @bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_stats')
 def show_detailed_stats(call):
     if str(call.from_user.id) != ADMIN_ID:
@@ -1231,6 +1234,7 @@ def show_detailed_stats(call):
     finally:
         conn.close()
 
+# Обработчик для команды /stat
 @bot.message_handler(commands=['stat'])
 def stat_command(message):
     # Проверяем, что команду отправил администратор
@@ -1292,7 +1296,7 @@ def stat_command(message):
     finally:
         conn.close()
 
-# Обработчик текстовых сообщений должен быть последним
+# Обработчик текстовых сообщений
 @bot.message_handler(content_types=['text'])
 def text_handler(message):
     if message.text == 'Оформить подписку':
@@ -1369,9 +1373,9 @@ def check_payments_periodically():
             logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
         
         # Проверяем каждые 60 секунд
-        time.sleep(60)
+        time.sleep(3600)
 
-# Обновляем функцию проверки подписок
+# Функция проверки подписок
 def check_subscriptions_periodically():
     while True:
         try:
@@ -1394,7 +1398,7 @@ def check_subscriptions_periodically():
         # Проверяем каждые 15 минут
         time.sleep(900)
 
-# Обновляем функцию run_bot для запуска периодической проверки подписок
+# Функция для запуска бота
 def run_bot():
     try:
         logger.info("Запуск бота...")
