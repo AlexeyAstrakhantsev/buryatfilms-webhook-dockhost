@@ -158,7 +158,7 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
 # Функция для отмены подписки
 def cancel_subscription(user_id, contract_id):
     try:
-        url = "https://gate.lava.top/api/v2/subscription/cancel"
+        url = "https://gate.lava.top/api/v1/subscriptions"
         headers = {
             "Content-Type": "application/json",
             "X-Api-Key": LAVA_API_KEY
