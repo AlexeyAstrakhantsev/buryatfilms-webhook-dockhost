@@ -123,16 +123,29 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
     }
     
     try:
-        logger.debug(f"Отправка запроса на создание ссылки: URL={url}, Headers={headers}, Payload={payload}")
+        logger.info(f"Создание ссылки на оплату для пользователя {user_id}")
+        logger.debug(f"URL запроса: {url}")
+        logger.debug(f"Заголовки: {headers}")
+        logger.debug(f"Тело запроса: {payload}")
+        
         response = requests.post(url, headers=headers, json=payload)
+        logger.debug(f"Код ответа: {response.status_code}")
+        logger.debug(f"Тело ответа: {response.text}")
+        
         response.raise_for_status()
         response_data = response.json()
-        logger.debug(f"Ответ от сервера: {response_data}")
+        
+        logger.info(f"Успешно получен ответ от API: {response_data}")
         return response_data
-    except Exception as e:
-        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}")
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка при отправке запроса: {str(e)}")
         if hasattr(e, 'response') and e.response is not None:
-            logger.error(f"Ответ сервера: {e.response.text}")
+            logger.error(f"Код ответа: {e.response.status_code}")
+            logger.error(f"Тело ответа: {e.response.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при создании ссылки: {str(e)}", exc_info=True)
         return None
 
 # Функция для отмены подписки
@@ -506,39 +519,6 @@ def show_subscription_menu(message):
                 reply_markup=markup,
                 parse_mode="HTML"
             )
-
-def subscribe_command(message):
-    # Правильно получаем ID пользователя
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    username = message.from_user.username if hasattr(message, 'from_user') else None
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
-    
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
-    if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        try:
-            bot.edit_message_text(
-                "У вас уже есть активная подписка!",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=markup
-            )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
-    
-    show_subscription_menu(message)
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -1596,3 +1576,60 @@ def show_detailed_stats(call):
         bot.answer_callback_query(call.id, "❌ Произошла ошибка при получении статистики")
     finally:
         conn.close()
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
+def process_currency_callback(call):
+    try:
+        # Получаем ID пользователя из callback
+        user_id = call.from_user.id
+        logger.info(f"Обработка выбора валюты для пользователя {user_id}")
+        
+        # Разбираем данные из callback
+        parts = call.data.split('|')
+        if len(parts) != 4:
+            raise ValueError("Неверный формат данных callback")
+        
+        _, offer_id, periodicity, currency = parts
+        logger.info(f"Параметры платежа: offer_id={offer_id}, periodicity={periodicity}, currency={currency}")
+        
+        # Создаем ссылку на оплату
+        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
+        logger.info(f"Получены данные для оплаты: {payment_data}")
+        
+        if not payment_data:
+            raise ValueError("Не удалось создать ссылку на оплату")
+        
+        # Получаем ссылку из ответа
+        payment_url = payment_data.get('paymentUrl')
+        if not payment_url:
+            raise ValueError("В ответе отсутствует ссылка на оплату")
+        
+        logger.info(f"Создана ссылка на оплату: {payment_url}")
+        
+        # Создаем клавиатуру с кнопками
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
+        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
+        markup.add(pay_button)
+        markup.add(back_button)
+        
+        # Отправляем сообщение с кнопкой оплаты
+        bot.edit_message_text(
+            "Для оплаты подписки нажмите на кнопку ниже:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        
+        # Отмечаем callback как обработанный
+        bot.answer_callback_query(call.id)
+        
+        # Логируем успешное создание ссылки
+        logger.info(f"Успешно создана ссылка на оплату для пользователя {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}", exc_info=True)
+        bot.answer_callback_query(
+            call.id,
+            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
+        )
