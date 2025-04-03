@@ -57,30 +57,52 @@ class WebhookPayload(BaseModel):
 
 # Инициализация базы данных
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type TEXT NOT NULL,
-        product_id TEXT NOT NULL,
-        product_title TEXT NOT NULL,
-        buyer_email TEXT NOT NULL,
-        contract_id TEXT NOT NULL,
-        parent_contract_id TEXT,
-        amount REAL NOT NULL,
-        currency TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error_message TEXT,
-        raw_data TEXT NOT NULL,
-        received_at TEXT NOT NULL,
-        processed INTEGER DEFAULT 0
-    )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info(f"База данных инициализирована по пути: {DB_PATH}")
+    """Инициализация базы данных при запуске"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Создаем таблицу payments
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            product_title TEXT NOT NULL,
+            buyer_email TEXT NOT NULL,
+            contract_id TEXT NOT NULL,
+            parent_contract_id TEXT,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            raw_data TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            processed INTEGER DEFAULT 0
+        )
+        ''')
+        
+        # Создаем таблицу channel_members
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channel_members (
+            user_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            joined_at TEXT NOT NULL,
+            expires_at TEXT,
+            subscription_end_date TEXT,
+            last_payment_id INTEGER,
+            FOREIGN KEY (last_payment_id) REFERENCES payments(id)
+        )
+        ''')
+        
+        conn.commit()
+        logger.info("База данных успешно инициализирована")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации БД: {str(e)}")
+    finally:
+        conn.close()
 
 # Проверка авторизации
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
@@ -179,8 +201,7 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
         cursor.execute("DROP TABLE IF EXISTS payments")
         cursor.execute("DROP TABLE IF EXISTS channel_members")
         
-        # Пересоздаем таблицы
-        # Создаем таблицу payments, если её нет
+        # Создаем таблицу payments
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,14 +222,16 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
         )
         ''')
         
-        # Создаем таблицу channel_members, если её нет
+        # Создаем таблицу channel_members с обновленной структурой
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS channel_members (
             user_id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             joined_at TEXT NOT NULL,
             expires_at TEXT,
-            subscription_end_date TEXT
+            subscription_end_date TEXT,
+            last_payment_id INTEGER,
+            FOREIGN KEY (last_payment_id) REFERENCES payments(id)
         )
         ''')
         

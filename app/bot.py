@@ -461,52 +461,6 @@ def check_new_payments():
     
     conn.close()
 
-# Обновляем функцию update_db_structure
-def update_db_structure():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Создаем таблицу payments, если её нет
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            product_title TEXT NOT NULL,
-            buyer_email TEXT NOT NULL,
-            contract_id TEXT NOT NULL,
-            parent_contract_id TEXT,
-            amount REAL NOT NULL,
-            currency TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            status TEXT NOT NULL,
-            error_message TEXT,
-            raw_data TEXT NOT NULL,
-            received_at TEXT NOT NULL,
-            processed INTEGER DEFAULT 0
-        )
-        ''')
-        
-        # Создаем таблицу channel_members, если её нет
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS channel_members (
-            user_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            joined_at TEXT NOT NULL,
-            expires_at TEXT,
-            subscription_end_date TEXT
-        )
-        ''')
-        
-        conn.commit()
-        logger.info("Структура базы данных успешно обновлена")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении структуры БД: {str(e)}")
-    finally:
-        conn.close()
-
 # Обработчики команд должны быть перед обработчиком текстовых сообщений
 
 def show_subscription_menu(message):
@@ -1351,9 +1305,6 @@ def run_bot():
             
         if not CHANNEL_ID:
             logger.warning("Не указан ID канала (CHANNEL_ID). Функции работы с каналом будут недоступны.")
-        
-        # Обновляем структуру БД
-        update_db_structure()
         
         # Запускаем периодическую проверку платежей в отдельном потоке
         payment_thread = threading.Thread(target=check_payments_periodically)
