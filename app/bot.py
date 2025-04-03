@@ -401,7 +401,33 @@ def check_new_payments():
                     # Добавляем пользователя в закрытый канал
                     add_user_to_channel(user_id)
                     
+                    # Отправляем сообщение с кнопкой для входа в канал
+                    channel_markup = types.InlineKeyboardMarkup(row_width=1)
+                    channel_button = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
+                    channel_markup.add(channel_button)
+                    
+                    bot.send_message(
+                        user_id,
+                        "Твой доступ к каналу:",
+                        reply_markup=channel_markup
+                    )
+                    
+                    # Показываем основное меню
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+                    btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+                    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+                    markup.add(btn_status, btn_channel, btn_support)
+                    
+                    bot.send_message(
+                        user_id,
+                        MAIN_MESSAGE,
+                        reply_markup=markup,
+                        parse_mode="HTML"
+                    )
+                    
                     logger.info(f"Отправлено уведомление пользователю {user_id} об успешной оплате")
+                    
                 elif status == 'subscription-failed' or status == 'failed':
                     # Отправляем уведомление о неудачной оплате
                     cursor.execute('SELECT error_message FROM payments WHERE id = ?', (payment_id,))
@@ -412,6 +438,20 @@ def check_new_payments():
                         f"К сожалению, оплата подписки '{product_title}' не удалась.\n"
                         f"Причина: {error_message}\n\n"
                         f"Вы можете попробовать снова, используя команду /subscribe"
+                    )
+                    
+                    # Показываем основное меню
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+                    btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+                    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+                    markup.add(btn_subscribe, btn_status, btn_support)
+                    
+                    bot.send_message(
+                        user_id,
+                        MAIN_MESSAGE,
+                        reply_markup=markup,
+                        parse_mode="HTML"
                     )
                     
                     logger.info(f"Отправлено уведомление пользователю {user_id} о неудачной оплате")
