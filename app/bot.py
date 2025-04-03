@@ -164,8 +164,8 @@ def cancel_subscription(user_id, contract_id):
             "X-Api-Key": LAVA_API_KEY
         }
         
-        # Добавляем email в payload
-        payload = {
+        # Добавляем параметры в URL для DELETE запроса
+        params = {
             "contractId": contract_id,
             "email": f"{user_id}@t.me"
         }
@@ -173,9 +173,9 @@ def cancel_subscription(user_id, contract_id):
         logger.info(f"Отправка запроса на отмену подписки:")
         logger.info(f"URL: {url}")
         logger.info(f"Headers: {headers}")
-        logger.info(f"Payload: {payload}")
+        logger.info(f"Params: {params}")
         
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.delete(url, headers=headers, params=params)
         
         logger.info(f"Ответ от LAVA.TOP:")
         logger.info(f"Статус: {response.status_code}")
