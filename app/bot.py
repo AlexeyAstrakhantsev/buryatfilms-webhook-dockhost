@@ -33,6 +33,11 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя пользователя техподдержки в Telegram
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылка на канал
+MAIN_MESSAGE = os.getenv("MAIN_MESSAGE", 
+    "👋 Добро пожаловать!\n\n"
+    "Этот бот поможет вам управлять подпиской на закрытый канал.\n"
+    "Выберите действие из меню ниже:"
+)
 
 
 # Обновляем словари для переводов
@@ -572,16 +577,14 @@ def start_command(message):
     btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
     btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
     
-    # Добавляем кнопки в клавиатуру по одной
+    # Добавляем кнопки в клавиатуру
     markup.add(btn_subscribe)
     markup.add(btn_status)
     markup.add(btn_support)
     
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {username}!\n"
-        "Я бот для управления подпиской на закрытый канал.\n"
-        "Выберите действие:",
+        MAIN_MESSAGE,
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -640,17 +643,19 @@ def show_main_menu(message):
     
     try:
         bot.edit_message_text(
-            "Выберите действие:",
+            MAIN_MESSAGE,
             chat_id=message.chat.id,
             message_id=message.message_id,
-            reply_markup=markup
+            reply_markup=markup,
+            parse_mode="HTML"
         )
     except Exception as e:
         # Если не удалось отредактировать, отправляем новое сообщение
         bot.send_message(
             message.chat.id,
-            "Выберите действие:",
-            reply_markup=markup
+            MAIN_MESSAGE,
+            reply_markup=markup,
+            parse_mode="HTML"
         )
 
 # Добавляем функцию для расчета оставшихся дней подписки
