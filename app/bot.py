@@ -693,7 +693,7 @@ def status_command(message):
         payment_info = cursor.fetchone()
         
         # Создаем inline-клавиатуру
-        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup = types.InlineKeyboardMarkup(row_width=1)
         
         if payment_info:
             status, timestamp, raw_data, contract_id, parent_contract_id = payment_info
@@ -719,23 +719,6 @@ def status_command(message):
                 subscription_type = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
                 
                 if status in ['subscription-active', 'active']:
-                    # Кнопки для активной подписки
-                    cancel_button = types.InlineKeyboardButton(
-                        text="❌ Отменить подписку",
-                        callback_data=f"cancel_{parent_contract_id or contract_id}"
-                    )
-                    channel_button = types.InlineKeyboardButton(
-                        text="📺 Перейти в канал",
-                        url=CHANNEL_LINK
-                    )
-                    menu_button = types.InlineKeyboardButton(
-                        text="🔙 Главное меню",
-                        callback_data="show_menu"
-                    )
-                    markup.add(channel_button)
-                    markup.add(cancel_button)
-                    markup.add(menu_button)
-                    
                     message_text = (
                         f"✅ <b>Ваша подписка активна</b>\n\n"
                         f"📅 Дата активации: {formatted_activation}\n"
@@ -743,49 +726,57 @@ def status_command(message):
                         f"📊 Осталось дней: {max(0, days_left)}\n"
                         f"📦 Тип подписки: {subscription_type}\n"
                     )
-                else:
-                    # Кнопки для неактивной подписки
-                    subscribe_button = types.InlineKeyboardButton(
-                        text="💳 Оформить подписку",
-                        callback_data="show_subscribe"
-                    )
-                    menu_button = types.InlineKeyboardButton(
-                        text="🔙 Главное меню",
-                        callback_data="show_menu"
-                    )
-                    markup.add(subscribe_button)
-                    markup.add(menu_button)
                     
+                    if CHANNEL_LINK:
+                        message_text += f"\n🔗 Ссылка на канал: {CHANNEL_LINK}"
+                    
+                    # Кнопки для активной подписки
+                    markup.add(types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK))
+                    markup.add(types.InlineKeyboardButton('❌ Отменить подписку', 
+                                                        callback_data=f"cancel_{parent_contract_id or contract_id}"))
+                else:
                     message_text = (
                         f"❌ <b>Ваша подписка неактивна</b>\n\n"
                         f"📅 Последний платеж: {formatted_activation}\n"
                         f"ℹ️ Статус: {status}\n\n"
                         f"Для оформления новой подписки используйте команду /subscribe"
                     )
+                    markup.add(types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe'))
             except Exception as e:
                 logger.error(f"Ошибка при обработке данных подписки: {str(e)}")
                 message_text = "❌ Ошибка при получении информации о подписке"
-                markup = None
+                markup.add(types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe'))
         else:
             message_text = (
                 "❌ <b>У вас нет активной подписки</b>\n\n"
                 "Для оформления подписки используйте команду /subscribe"
             )
-            markup = None
+            markup.add(types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe'))
+        
+        # Всегда добавляем кнопку возврата в меню
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
         
         # Отправляем или редактируем сообщение
         if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            # Если это callback, редактируем существующее сообщение
-            bot.edit_message_text(
-                message_text,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                parse_mode="HTML",
-                reply_markup=markup,
-                disable_web_page_preview=True
-            )
+            try:
+                bot.edit_message_text(
+                    message_text,
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при редактировании сообщения: {str(e)}")
+                bot.send_message(
+                    message.chat.id,
+                    message_text,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                    disable_web_page_preview=True
+                )
         else:
-            # Если это новое сообщение
             bot.send_message(
                 message.chat.id,
                 message_text,
@@ -796,15 +787,30 @@ def status_command(message):
         
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+        
         error_message = "❌ Произошла ошибка при проверке статуса подписки"
         if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            bot.edit_message_text(
-                error_message,
-                chat_id=message.chat.id,
-                message_id=message.message_id
-            )
+            try:
+                bot.edit_message_text(
+                    error_message,
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    reply_markup=markup
+                )
+            except:
+                bot.send_message(
+                    message.chat.id,
+                    error_message,
+                    reply_markup=markup
+                )
         else:
-            bot.reply_to(message, error_message)
+            bot.send_message(
+                message.chat.id,
+                error_message,
+                reply_markup=markup
+            )
     finally:
         conn.close()
 
@@ -1374,3 +1380,81 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
+
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
+    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+    
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        # Используем edit_message_text для callback и send_message для команды
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            bot.edit_message_text(
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
+            )
+        return
+    
+    # Получаем список доступных подписок
+    subscriptions = get_available_subscriptions()
+    if not subscriptions:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_menu)
+        
+        # Используем edit_message_text для callback и send_message для команды
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            bot.edit_message_text(
+                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                reply_markup=markup
+            )
+        return
+    
+    # Для каждой подписки создаем отдельное сообщение с кнопками периодов
+    for sub in subscriptions:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        # Создаем кнопки для каждого периода
+        for price in sub["prices"]:
+            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
+            rub_amount = price["currencies"].get("RUB", 0)
+            button_text = f"{period_text} - {rub_amount} ₽"
+            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
+            markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
+        
+        # Добавляем кнопку возврата в меню
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+        
+        message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
+        bot.send_message(
+            message.chat.id,
+            message_text,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
