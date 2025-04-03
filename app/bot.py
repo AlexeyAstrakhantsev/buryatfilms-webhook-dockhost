@@ -447,45 +447,10 @@ def update_db_structure():
 
 # Обработчики команд должны быть перед обработчиком текстовых сообщений
 
-@bot.message_handler(commands=['subscribe'])
-def subscribe_command(message):
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
-    
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
-    if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        # Используем edit_message_text для callback и send_message для команды
-        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            try:
-                bot.edit_message_text(
-                    "У вас уже есть активная подписка!",
-                    chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    reply_markup=markup
-                )
-            except Exception as e:
-                bot.send_message(
-                    message.chat.id,
-                    "У вас уже есть активная подписка!",
-                    reply_markup=markup
-                )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
-    
+def show_subscription_menu(message):
+    """
+    Показывает меню выбора периода подписки
+    """
     # Получаем список доступных подписок
     subscriptions = get_available_subscriptions()
     if not subscriptions:
@@ -493,22 +458,14 @@ def subscribe_command(message):
         btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
         markup.add(btn_menu)
         
-        # Используем edit_message_text для callback и send_message для команды
-        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            try:
-                bot.edit_message_text(
-                    "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
-                    chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    reply_markup=markup
-                )
-            except Exception as e:
-                bot.send_message(
-                    message.chat.id,
-                    "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
-                    reply_markup=markup
-                )
-        else:
+        try:
+            bot.edit_message_text(
+                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
             bot.send_message(
                 message.chat.id,
                 "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
@@ -538,6 +495,39 @@ def subscribe_command(message):
             reply_markup=markup,
             parse_mode="HTML"
         )
+
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
+    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+    
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
+            )
+        return
+    
+    show_subscription_menu(message)
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -569,10 +559,10 @@ def start_command(message):
     )
 
 # Обработчик для inline-кнопок основного меню
-@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu'])
+@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu', 'back_to_periods'])
 def process_main_menu(call):
     try:
-        if call.data == 'show_subscribe':
+        if call.data == 'show_subscribe' or call.data == 'back_to_periods':
             subscribe_command(call.message)
         elif call.data == 'show_status':
             status_command(call.message)
@@ -992,7 +982,7 @@ def process_payment_callback(call):
         # Добавляем кнопку "Назад"
         back_button = types.InlineKeyboardButton(
             text="← Назад к выбору периода",
-            callback_data=f"back_to_subscription|{offer_id}"
+            callback_data=f"back_to_periods|{offer_id}"
         )
         markup.add(back_button)
         
@@ -1012,8 +1002,8 @@ def process_payment_callback(call):
         )
 
 # Обновляем обработчик для кнопки "Назад к подписке"
-@bot.callback_query_handler(func=lambda call: call.data.startswith('back_to_subscription|'))
-def process_back_to_subscription(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('back_to_periods|'))
+def process_back_to_periods(call):
     try:
         offer_id = call.data.split('|')[1]
         
