@@ -182,7 +182,8 @@ def cancel_subscription(user_id, contract_id):
         logger.info(f"Тело ответа: {response.text}")
         logger.info(f"Заголовки: {response.headers}")
         
-        if response.status_code == 200:
+        # Проверяем оба кода успешного ответа: 200 и 204
+        if response.status_code in [200, 204]:
             logger.info(f"Подписка успешно отменена для пользователя {user_id}")
             
             # Обновляем статус в БД, но сохраняем дату окончания
