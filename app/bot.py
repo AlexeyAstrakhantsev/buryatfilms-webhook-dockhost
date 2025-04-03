@@ -203,35 +203,30 @@ def check_subscription_status(user_id):
         
         # Сначала проверяем статус в channel_members
         cursor.execute('''
-        SELECT status, subscription_end_date, last_payment_id
-        FROM channel_members
-        WHERE user_id = ? AND status = 'active'
+        SELECT cm.status, cm.subscription_end_date, cm.last_payment_id,
+               p.contract_id, p.parent_contract_id
+        FROM channel_members cm
+        LEFT JOIN payments p ON p.id = cm.last_payment_id
+        WHERE cm.user_id = ? AND cm.status = 'active'
         ''', (user_id,))
         
         member = cursor.fetchone()
         
         if member:
-            status, end_date, last_payment_id = member
+            status, end_date, last_payment_id, contract_id, parent_contract_id = member
             
             # Проверяем, не истекла ли подписка
             if end_date and datetime.fromisoformat(end_date) > datetime.now(timezone.utc):
-                # Получаем дополнительную информацию о платеже
-                cursor.execute('''
-                SELECT status, timestamp, event_type
-                FROM payments
-                WHERE id = ?
-                ''', (last_payment_id,))
-                payment = cursor.fetchone()
-                
                 return {
                     "status": "active",
                     "end_date": end_date,
-                    "data": payment
+                    "contract_id": parent_contract_id or contract_id
                 }
         
         # Если нет активной записи в channel_members, проверяем последний платеж
         cursor.execute('''
-        SELECT p.status, p.timestamp, p.event_type, cm.subscription_end_date
+        SELECT p.status, p.timestamp, p.event_type, cm.subscription_end_date,
+               p.contract_id, p.parent_contract_id
         FROM payments p
         LEFT JOIN channel_members cm ON cm.last_payment_id = p.id
         WHERE p.buyer_email = ?
@@ -244,7 +239,7 @@ def check_subscription_status(user_id):
         conn.close()
         
         if payment:
-            status, timestamp, event_type, end_date = payment
+            status, timestamp, event_type, end_date, contract_id, parent_contract_id = payment
             
             # Проверяем, что подписка активна и не истекла
             is_active = (
@@ -255,7 +250,7 @@ def check_subscription_status(user_id):
             return {
                 "status": "active" if is_active else "inactive",
                 "end_date": end_date,
-                "data": payment
+                "contract_id": parent_contract_id or contract_id
             }
         
         return {"status": "no_subscription"}
@@ -650,9 +645,11 @@ def show_status_callback(call):
             
             # Кнопки для активной подписки
             btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+            btn_cancel = types.InlineKeyboardButton('❌ Отменить подписку', 
+                                                  callback_data=f"cancel_{subscription['contract_id']}")
             btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-            markup.add(btn_channel, btn_support, btn_menu)
+            markup.add(btn_channel, btn_cancel, btn_support, btn_menu)
             
         else:
             message_text = (
