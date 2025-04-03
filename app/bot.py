@@ -34,10 +34,6 @@ DB_PATH = DATA_DIR / "lava_payments.db"
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя пользователя техподдержки в Telegram
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылка на канал
 
-# Список привилегированных пользователей (всегда имеют доступ к каналу)
-PRIVILEGED_USERS = os.getenv("PRIVILEGED_USERS", "").split(",")  # ID через запятую в переменной окружения
-if ADMIN_ID:  # Автоматически добавляем админа в список привилегированных пользователей
-    PRIVILEGED_USERS.append(ADMIN_ID)
 
 # Обновляем словари для переводов
 PERIOD_TRANSLATIONS = {
@@ -1429,3 +1425,145 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
+
+@bot.message_handler(commands=['stat'])
+def stat_command(message):
+    # Проверяем, что команду отправил администратор
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем общую статистику
+        cursor.execute('''
+        SELECT 
+            COUNT(DISTINCT buyer_email) as total_users,
+            COUNT(DISTINCT CASE WHEN event_type = 'payment.success' THEN buyer_email END) as unique_paid,
+            COUNT(DISTINCT CASE WHEN event_type = 'subscription.recurring.payment.success' THEN buyer_email END) as unique_renewed,
+            COUNT(CASE WHEN event_type = 'payment.success' THEN 1 END) as total_payments,
+            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.success' THEN 1 END) as total_renewals,
+            COUNT(CASE WHEN event_type = 'payment.failed' THEN 1 END) as failed_payments,
+            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.failed' THEN 1 END) as failed_renewals
+        FROM payments
+        ''')
+        
+        stats = cursor.fetchone()
+        
+        # Получаем количество активных подписок
+        cursor.execute('''
+        SELECT COUNT(*) 
+        FROM channel_members 
+        WHERE status = 'active'
+        ''')
+        active_subs = cursor.fetchone()[0]
+        
+        # Формируем краткую статистику
+        summary = (
+            "📊 <b>Статистика подписок</b>\n\n"
+            f"👥 Всего пользователей: {stats[0]}\n"
+            f"✅ Активных подписок: {active_subs}\n"
+            f"💳 Уникальных оплат: {stats[1]}\n"
+            f"🔄 Уникальных продлений: {stats[2]}\n"
+            f"📈 Всего успешных оплат: {stats[3]}\n"
+            f"📊 Всего успешных продлений: {stats[4]}\n"
+            f"❌ Неудачных оплат: {stats[5]}\n"
+            f"⚠️ Неудачных продлений: {stats[6]}\n\n"
+            "Для подробной информации нажмите кнопку ниже:"
+        )
+        
+        # Создаем клавиатуру
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_details = types.InlineKeyboardButton('📋 Подробная статистика', callback_data='show_detailed_stats')
+        markup.add(btn_details)
+        
+        bot.reply_to(message, summary, parse_mode="HTML", reply_markup=markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {str(e)}")
+        bot.reply_to(message, "❌ Произошла ошибка при получении статистики")
+    finally:
+        conn.close()
+
+# Обработчик для подробной статистики
+@bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_stats')
+def show_detailed_stats(call):
+    if str(call.from_user.id) != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Эта функция доступна только администратору")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем активных пользователей с деталями
+        cursor.execute('''
+        WITH LastPayments AS (
+            SELECT 
+                buyer_email,
+                status,
+                timestamp,
+                event_type,
+                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
+            FROM payments
+            WHERE event_type IN ('payment.success', 'subscription.recurring.payment.success')
+        )
+        SELECT 
+            REPLACE(buyer_email, '@t.me', '') as user_id,
+            status,
+            timestamp,
+            event_type
+        FROM LastPayments
+        WHERE rn = 1
+        ORDER BY timestamp DESC
+        LIMIT 50
+        ''')
+        
+        active_users = cursor.fetchall()
+        
+        # Формируем подробный отчет
+        detailed_stats = "📋 <b>Подробная статистика по пользователям</b>\n\n"
+        
+        for user in active_users:
+            user_id = user[0]
+            status = user[1]
+            timestamp = datetime.fromisoformat(user[2].replace('Z', '+00:00')).strftime("%d.%m.%Y %H:%M")
+            event_type = "🔄 Продление" if 'recurring' in user[3] else "💳 Первая оплата"
+            
+            status_emoji = "✅" if status in ['subscription-active', 'active'] else "❌"
+            
+            detailed_stats += (
+                f"{status_emoji} <a href='tg://user?id={user_id}'>Пользователь {user_id}</a>\n"
+                f"Статус: {status}\n"
+                f"Последнее событие: {event_type}\n"
+                f"Дата: {timestamp}\n"
+                "➖➖➖➖➖➖➖➖➖➖\n"
+            )
+        
+        # Разбиваем на части, если сообщение слишком длинное
+        if len(detailed_stats) > 4096:
+            for x in range(0, len(detailed_stats), 4096):
+                part = detailed_stats[x:x+4096]
+                bot.send_message(
+                    call.message.chat.id,
+                    part,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+        else:
+            bot.send_message(
+                call.message.chat.id,
+                detailed_stats,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+        
+        bot.answer_callback_query(call.id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении подробной статистики: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка при получении статистики")
+    finally:
+        conn.close()
