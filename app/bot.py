@@ -164,8 +164,10 @@ def cancel_subscription(user_id, contract_id):
             "X-Api-Key": LAVA_API_KEY
         }
         
+        # Добавляем email в payload
         payload = {
-            "contractId": contract_id
+            "contractId": contract_id,
+            "email": f"{user_id}@t.me"
         }
         
         logger.info(f"Отправка запроса на отмену подписки:")
