@@ -954,53 +954,59 @@ def cancel_subscription_callback(call):
             "❌ Произошла ошибка при отмене подписки"
         )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
-def process_currency_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pay|'))
+def process_payment_callback(call):
     try:
         # Получаем ID пользователя из callback
         user_id = call.from_user.id
         
         # Разбираем данные из callback
         parts = call.data.split('|')
-        if len(parts) != 4:
+        if len(parts) != 3:
             raise ValueError("Неверный формат данных callback")
         
-        _, offer_id, periodicity, currency = parts
+        _, offer_id, periodicity = parts
         
-        # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
+        # Получаем информацию о подписке для отображения цен
+        subscriptions = get_available_subscriptions()
+        if not subscriptions:
+            raise ValueError("Не удалось получить информацию о подписке")
         
-        if not payment_data:
-            raise ValueError("Не удалось создать ссылку на оплату")
+        # Ищем нужную подписку и период
+        subscription = next((sub for sub in subscriptions if sub["offer_id"] == offer_id), None)
+        if not subscription:
+            raise ValueError("Подписка не найдена")
         
-        # Получаем ссылку из ответа
-        payment_url = payment_data.get('paymentUrl')
-        if not payment_url:
-            raise ValueError("В ответе отсутствует ссылка на оплату")
+        price_info = next((p for p in subscription["prices"] if p["periodicity"] == periodicity), None)
+        if not price_info:
+            raise ValueError("Информация о ценах не найдена")
         
-        # Создаем клавиатуру с кнопками
+        # Создаем кнопки выбора валюты
         markup = types.InlineKeyboardMarkup(row_width=1)
-        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
-        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
-        markup.add(pay_button)
-        markup.add(back_button)
         
-        # Отправляем сообщение с кнопкой оплаты
+        # Добавляем кнопки для каждой доступной валюты
+        for currency, amount in price_info["currencies"].items():
+            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
+            button_text = f"Оплатить {amount} {currency_symbol}"
+            callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
+            markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
+        
+        # Добавляем кнопку "Назад"
+        markup.add(types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe'))
+        
+        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
         bot.edit_message_text(
-            "Для оплаты подписки нажмите на кнопку ниже:",
+            f"Выберите способ оплаты подписки на {period_text}:",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
         
-        # Логируем создание ссылки
-        logger.info(f"Создана ссылка на оплату для пользователя {user_id}")
-        
     except Exception as e:
-        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}")
+        logger.error(f"Ошибка при обработке callback выбора периода: {str(e)}")
         bot.answer_callback_query(
             call.id,
-            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
+            "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
 @bot.message_handler(commands=['test_payment'])
@@ -1271,7 +1277,14 @@ def text_handler(message):
     elif message.text == 'Статус подписки':
         status_command(message)
     elif message.text == 'Поддержка':
-        support_handler(message)
+        if SUPPORT_USERNAME:
+            bot.send_message(
+                message.chat.id,
+                f"📞 Напишите нам: @{SUPPORT_USERNAME}",
+                disable_web_page_preview=True
+            )
+        else:
+            bot.reply_to(message, "❌ Извините, служба поддержки временно недоступна")
     elif message.text == 'Перейти в канал':
         if CHANNEL_LINK:
             bot.reply_to(
@@ -1284,9 +1297,34 @@ def text_handler(message):
     else:
         # Проверяем, является ли сообщение командой
         if message.text.startswith('/'):
-            bot.reply_to(message, "Неизвестная команда. Доступные команды: /start, /subscribe, /status")
+            available_commands = [
+                "/start - начать работу с ботом",
+                "/subscribe - оформить подписку",
+                "/status - проверить статус подписки"
+            ]
+            
+            # Добавляем админские команды, если сообщение от админа
+            if str(message.from_user.id) == ADMIN_ID:
+                available_commands.extend([
+                    "/stat - статистика подписок",
+                    "/test - тестовый платеж",
+                    "/test_fail - тестовый неуспешный платеж",
+                    "/test_expire - тестовая истекшая подписка"
+                ])
+            
+            bot.reply_to(
+                message, 
+                "Неизвестная команда.\nДоступные команды:\n" + "\n".join(available_commands)
+            )
         else:
-            bot.reply_to(message, "Используйте кнопки или команды /start, /subscribe, /status")
+            bot.reply_to(
+                message, 
+                "Используйте кнопки меню или команды:\n" + "\n".join([
+                    "/start - начать работу с ботом",
+                    "/subscribe - оформить подписку",
+                    "/status - проверить статус подписки"
+                ])
+            )
 
 # Функция для обработки кнопки "Поддержка"
 def support_handler(message):
