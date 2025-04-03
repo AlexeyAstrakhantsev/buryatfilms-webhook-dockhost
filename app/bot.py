@@ -156,43 +156,51 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
         return None
 
 # Функция для отмены подписки
-def cancel_subscription(user_id, parent_contract_id):
-    url = "https://gate.lava.top/api/v1/subscriptions"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Api-Key": LAVA_API_KEY
-    }
-    payload = {
-        "contractId": parent_contract_id,
-        "email": f"{user_id}@t.me"
-    }
-    
+def cancel_subscription(user_id, contract_id):
+    """
+    Отменяет подписку пользователя через API LAVA.TOP
+    """
     try:
-        response = requests.delete(url, headers=headers, json=payload)
+        url = "https://gate.lava.top/api/v2/subscription/cancel"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Api-Key": LAVA_API_KEY
+        }
         
-        # Логируем ответ от LAVA.TOP
-        logger.info(f"Ответ от LAVA.TOP при отмене подписки: Статус {response.status_code}, Заголовки: {response.headers}")
+        # Формируем тело запроса
+        payload = {
+            "contractId": contract_id  # Используем contractId как параметр в теле запроса
+        }
         
-        # Проверяем код ответа (204 означает успешную отмену)
-        if response.status_code == 204:
-            # Обновляем статус подписки в БД
+        logger.info(f"Отправка запроса на отмену подписки для пользователя {user_id}, контракт {contract_id}")
+        
+        response = requests.post(url, headers=headers, json=payload)
+        
+        logger.info(f"Ответ от LAVA.TOP при отмене подписки: "
+                   f"Статус {response.status_code}, "
+                   f"Заголовки: {response.headers}")
+        
+        if response.status_code == 200:
+            logger.info(f"Подписка успешно отменена для пользователя {user_id}")
+            
+            # Обновляем статус в БД, но сохраняем дату окончания
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute('''
-            UPDATE payments 
-            SET status = 'subscription-cancelled' 
-            WHERE buyer_email = ? AND (parent_contract_id = ? OR contract_id = ?)
-            ''', (f"{user_id}@t.me", parent_contract_id, parent_contract_id))
+            UPDATE channel_members 
+            SET status = 'cancelled' 
+            WHERE user_id = ? AND status = 'active'
+            ''', (user_id,))
             conn.commit()
             conn.close()
             
-            logger.info(f"Подписка успешно отменена для пользователя {user_id}, контракт {parent_contract_id}")
             return True
         else:
             logger.error(f"Ошибка при отмене подписки: код {response.status_code}, ответ: {response.text}")
             return False
+            
     except Exception as e:
-        logger.error(f"Исключение при отмене подписки: {str(e)}")
+        logger.error(f"Ошибка при отмене подписки: {str(e)}")
         return False
 
 # Функция для проверки статуса подписки пользователя
