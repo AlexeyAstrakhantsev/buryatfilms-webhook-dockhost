@@ -455,15 +455,16 @@ def start_command(message):
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
     # Создаем inline-клавиатуру
-    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
     # Основные кнопки
     btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
     btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
     btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
     
-    # Добавляем кнопки в клавиатуру
-    markup.add(btn_subscribe, btn_status)
+    # Добавляем кнопки в клавиатуру по одной
+    markup.add(btn_subscribe)
+    markup.add(btn_status)
     markup.add(btn_support)
     
     bot.send_message(
@@ -497,7 +498,7 @@ def process_main_menu(call):
 
 # Функция для показа главного меню
 def show_main_menu(message):
-    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
     # Проверяем статус подписки для определения доступных кнопок
     subscription = check_subscription_status(message.chat.id)
@@ -507,22 +508,32 @@ def show_main_menu(message):
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
         btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
         btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
-        markup.add(btn_status, btn_channel)
+        markup.add(btn_status)
+        markup.add(btn_channel)
         markup.add(btn_support)
     else:
         # Кнопки для неактивной подписки
         btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
         btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
-        markup.add(btn_subscribe, btn_status)
+        markup.add(btn_subscribe)
+        markup.add(btn_status)
         markup.add(btn_support)
     
-    bot.edit_message_text(
-        "Выберите действие:",
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        reply_markup=markup
-    )
+    try:
+        bot.edit_message_text(
+            "Выберите действие:",
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=markup
+        )
+    except Exception as e:
+        # Если не удалось отредактировать, отправляем новое сообщение
+        bot.send_message(
+            message.chat.id,
+            "Выберите действие:",
+            reply_markup=markup
+        )
 
 # Добавляем функцию для расчета оставшихся дней подписки
 def calculate_days_left(timestamp, periodicity):
