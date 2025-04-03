@@ -123,9 +123,12 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
     }
     
     try:
+        logger.debug(f"Отправка запроса на создание ссылки: URL={url}, Headers={headers}, Payload={payload}")
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()
+        response_data = response.json()
+        logger.debug(f"Ответ от сервера: {response_data}")
+        return response_data
     except Exception as e:
         logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}")
         if hasattr(e, 'response') and e.response is not None:
@@ -504,10 +507,10 @@ def show_subscription_menu(message):
                 parse_mode="HTML"
             )
 
-@bot.message_handler(commands=['subscribe'])
 def subscribe_command(message):
+    # Правильно получаем ID пользователя
     user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
+    username = message.from_user.username if hasattr(message, 'from_user') else None
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
     
@@ -951,65 +954,53 @@ def cancel_subscription_callback(call):
             "❌ Произошла ошибка при отмене подписки"
         )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('pay|'))
-def process_payment_callback(call):
-    user_id = call.from_user.id
-    username = call.from_user.username or f"user_{user_id}"
-    
+@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
+def process_currency_callback(call):
     try:
+        # Получаем ID пользователя из callback
+        user_id = call.from_user.id
+        
         # Разбираем данные из callback
         parts = call.data.split('|')
-        if len(parts) != 3:
+        if len(parts) != 4:
             raise ValueError("Неверный формат данных callback")
         
-        _, offer_id, periodicity = parts
+        _, offer_id, periodicity, currency = parts
         
-        # Получаем информацию о подписке для отображения цен
-        subscriptions = get_available_subscriptions()
-        if not subscriptions:
-            raise ValueError("Не удалось получить информацию о подписке")
+        # Создаем ссылку на оплату
+        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
         
-        # Ищем нужную подписку и период
-        subscription = next((sub for sub in subscriptions if sub["offer_id"] == offer_id), None)
-        if not subscription:
-            raise ValueError("Подписка не найдена")
+        if not payment_data:
+            raise ValueError("Не удалось создать ссылку на оплату")
         
-        price_info = next((p for p in subscription["prices"] if p["periodicity"] == periodicity), None)
-        if not price_info:
-            raise ValueError("Информация о ценах не найдена")
+        # Получаем ссылку из ответа
+        payment_url = payment_data.get('paymentUrl')
+        if not payment_url:
+            raise ValueError("В ответе отсутствует ссылка на оплату")
         
-        # Создаем кнопки выбора валюты
+        # Создаем клавиатуру с кнопками
         markup = types.InlineKeyboardMarkup(row_width=1)
-        currency_buttons = []
+        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
+        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
+        markup.add(pay_button)
+        markup.add(back_button)
         
-        for currency, amount in price_info["currencies"].items():
-            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
-            button_text = f"Оплатить {amount} {currency_symbol}"
-            callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
-            currency_buttons.append(
-                types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
-            )
-        
-        # Добавляем каждую кнопку отдельно
-        for button in currency_buttons:
-            markup.add(button)
-        
-        # Добавляем кнопку "Назад"
-        markup.add(types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe'))
-        
-        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
+        # Отправляем сообщение с кнопкой оплаты
         bot.edit_message_text(
-            f"Выберите способ оплаты подписки на {period_text}:",
+            "Для оплаты подписки нажмите на кнопку ниже:",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
         
+        # Логируем создание ссылки
+        logger.info(f"Создана ссылка на оплату для пользователя {user_id}")
+        
     except Exception as e:
-        logger.error(f"Ошибка при обработке callback выбора периода: {str(e)}")
+        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}")
         bot.answer_callback_query(
             call.id,
-            "Произошла ошибка. Пожалуйста, попробуйте позже."
+            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
         )
 
 @bot.message_handler(commands=['test_payment'])
