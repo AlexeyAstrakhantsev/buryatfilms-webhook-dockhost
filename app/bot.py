@@ -454,68 +454,75 @@ def start_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_subscribe = types.KeyboardButton('Оформить подписку')
-    btn_status = types.KeyboardButton('Статус подписки')
-    btn_support = types.KeyboardButton('Поддержка')
+    # Создаем inline-клавиатуру
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Основные кнопки
+    btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+    btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+    btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+    
+    # Добавляем кнопки в клавиатуру
     markup.add(btn_subscribe, btn_status)
-    markup.add(btn_support)  # Добавляем кнопку поддержки отдельной строкой
+    markup.add(btn_support)
     
     bot.send_message(
         message.chat.id,
-        f"Привет, {username}! Я бот для оформления подписки. Выберите действие:",
-        reply_markup=markup
+        f"👋 Привет, {username}!\n"
+        "Я бот для управления подпиской на закрытый канал.\n"
+        "Выберите действие:",
+        reply_markup=markup,
+        parse_mode="HTML"
     )
 
-@bot.message_handler(commands=['subscribe'])
-def subscribe_command(message):
-    user_id = message.from_user.id
-    username = message.from_user.username or f"user_{user_id}"
+# Обработчик для inline-кнопок основного меню
+@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu'])
+def process_main_menu(call):
+    try:
+        if call.data == 'show_subscribe':
+            subscribe_command(call.message)
+        elif call.data == 'show_status':
+            status_command(call.message)
+        elif call.data == 'show_support':
+            support_handler(call.message)
+        elif call.data == 'show_menu':
+            show_main_menu(call.message)
+        
+        # Отмечаем callback как обработанный
+        bot.answer_callback_query(call.id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обработке кнопки меню: {str(e)}")
+        bot.answer_callback_query(call.id, "Произошла ошибка. Попробуйте позже.")
+
+# Функция для показа главного меню
+def show_main_menu(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
     
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+    # Проверяем статус подписки для определения доступных кнопок
+    subscription = check_subscription_status(message.chat.id)
     
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
-        bot.send_message(
-            message.chat.id,
-            "У вас уже есть активная подписка!"
-        )
-        return
+        # Кнопки для активной подписки
+        btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+        btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+        markup.add(btn_status, btn_channel)
+        markup.add(btn_support)
+    else:
+        # Кнопки для неактивной подписки
+        btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+        btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', callback_data='show_support')
+        markup.add(btn_subscribe, btn_status)
+        markup.add(btn_support)
     
-    # Получаем список доступных подписок
-    subscriptions = get_available_subscriptions()
-    if not subscriptions:
-        bot.send_message(
-            message.chat.id,
-            "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже."
-        )
-        return
-    
-    # Для каждой подписки создаем отдельное сообщение с кнопками периодов
-    for sub in subscriptions:
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        
-        # Создаем кнопки для каждого периода
-        period_buttons = []
-        for price in sub["prices"]:
-            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
-            rub_amount = price["currencies"].get("RUB", 0)
-            button_text = f"{period_text} - {rub_amount} ₽"
-            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
-            period_buttons.append(
-                types.InlineKeyboardButton(text=button_text, callback_data=callback_data)
-            )
-        
-        markup.add(*period_buttons)
-        
-        message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
-        bot.send_message(
-            message.chat.id,
-            message_text,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
+    bot.edit_message_text(
+        "Выберите действие:",
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        reply_markup=markup
+    )
 
 # Добавляем функцию для расчета оставшихся дней подписки
 def calculate_days_left(timestamp, periodicity):
@@ -644,10 +651,10 @@ def check_subscription_expiration():
     except Exception as e:
         logger.error(f"Ошибка при проверке сроков подписок: {str(e)}", exc_info=True)
 
-# Обновляем функцию status_command для красивого вывода даты
+# Обновляем функцию status_command
 @bot.message_handler(commands=['status'])
 def status_command(message):
-    user_id = message.from_user.id
+    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -674,9 +681,8 @@ def status_command(message):
         
         payment_info = cursor.fetchone()
         
-        # Создаем базовую клавиатуру
-        reply_markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-        reply_markup.add(types.KeyboardButton('Статус подписки'))
+        # Создаем inline-клавиатуру
+        markup = types.InlineKeyboardMarkup(row_width=2)
         
         if payment_info:
             status, timestamp, raw_data, contract_id, parent_contract_id = payment_info
@@ -702,18 +708,22 @@ def status_command(message):
                 subscription_type = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
                 
                 if status in ['subscription-active', 'active']:
-                    # Создаем inline клавиатуру для отмены подписки
-                    inline_markup = types.InlineKeyboardMarkup(row_width=1)
+                    # Кнопки для активной подписки
                     cancel_button = types.InlineKeyboardButton(
                         text="❌ Отменить подписку",
                         callback_data=f"cancel_{parent_contract_id or contract_id}"
                     )
-                    inline_markup.add(cancel_button)
-                    
-                    # Добавляем кнопку "Перейти в канал" в основную клавиатуру
-                    reply_markup.add(
-                        types.KeyboardButton('Перейти в канал')
+                    channel_button = types.InlineKeyboardButton(
+                        text="📺 Перейти в канал",
+                        url=CHANNEL_LINK
                     )
+                    menu_button = types.InlineKeyboardButton(
+                        text="🔙 Главное меню",
+                        callback_data="show_menu"
+                    )
+                    markup.add(channel_button)
+                    markup.add(cancel_button)
+                    markup.add(menu_button)
                     
                     message_text = (
                         f"✅ <b>Ваша подписка активна</b>\n\n"
@@ -722,47 +732,68 @@ def status_command(message):
                         f"📊 Осталось дней: {max(0, days_left)}\n"
                         f"📦 Тип подписки: {subscription_type}\n"
                     )
-                    
-                    # Добавляем ссылку на канал, если она задана
-                    if CHANNEL_LINK:
-                        message_text += f"\n🔗 Ссылка на канал: {CHANNEL_LINK}"
                 else:
+                    # Кнопки для неактивной подписки
+                    subscribe_button = types.InlineKeyboardButton(
+                        text="💳 Оформить подписку",
+                        callback_data="show_subscribe"
+                    )
+                    menu_button = types.InlineKeyboardButton(
+                        text="🔙 Главное меню",
+                        callback_data="show_menu"
+                    )
+                    markup.add(subscribe_button)
+                    markup.add(menu_button)
+                    
                     message_text = (
                         f"❌ <b>Ваша подписка неактивна</b>\n\n"
                         f"📅 Последний платеж: {formatted_activation}\n"
                         f"ℹ️ Статус: {status}\n\n"
                         f"Для оформления новой подписки используйте команду /subscribe"
                     )
-                    reply_markup.add(types.KeyboardButton('Оформить подписку'))
-                    inline_markup = None
             except Exception as e:
                 logger.error(f"Ошибка при обработке данных подписки: {str(e)}")
                 message_text = "❌ Ошибка при получении информации о подписке"
-                inline_markup = None
-                reply_markup.add(types.KeyboardButton('Оформить подписку'))
+                markup = None
         else:
             message_text = (
                 "❌ <b>У вас нет активной подписки</b>\n\n"
                 "Для оформления подписки используйте команду /subscribe"
             )
-            reply_markup.add(types.KeyboardButton('Оформить подписку'))
-            inline_markup = None
+            markup = None
         
-        # Добавляем кнопку поддержки
-        reply_markup.add(types.KeyboardButton('Поддержка'))
-        
-        # Отправляем сообщение
-        bot.reply_to(
-            message, 
-            message_text, 
-            parse_mode="HTML",
-            reply_markup=inline_markup or reply_markup,
-            disable_web_page_preview=True
-        )
+        # Отправляем или редактируем сообщение
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            # Если это callback, редактируем существующее сообщение
+            bot.edit_message_text(
+                message_text,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True
+            )
+        else:
+            # Если это новое сообщение
+            bot.send_message(
+                message.chat.id,
+                message_text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True
+            )
         
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
-        bot.reply_to(message, "❌ Произошла ошибка при проверке статуса подписки")
+        error_message = "❌ Произошла ошибка при проверке статуса подписки"
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            bot.edit_message_text(
+                error_message,
+                chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+        else:
+            bot.reply_to(message, error_message)
     finally:
         conn.close()
 
@@ -1213,20 +1244,34 @@ def support_handler(message):
     
     support_link = f"https://t.me/{SUPPORT_USERNAME}"
     
-    # Создаем inline кнопку для перехода в чат поддержки
-    markup = types.InlineKeyboardMarkup()
+    # Создаем inline-клавиатуру
+    markup = types.InlineKeyboardMarkup(row_width=1)
     support_button = types.InlineKeyboardButton(
-        text="Написать в поддержку",
+        text="💬 Написать в поддержку",
         url=support_link
     )
-    markup.add(support_button)
-    
-    bot.reply_to(
-        message,
-        "📞 Служба поддержки всегда готова помочь вам!\n\n"
-        "Нажмите на кнопку ниже, чтобы связаться с нами:",
-        reply_markup=markup
+    menu_button = types.InlineKeyboardButton(
+        text="🔙 Главное меню",
+        callback_data="show_menu"
     )
+    markup.add(support_button, menu_button)
+    
+    # Отправляем или редактируем сообщение
+    if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+        bot.edit_message_text(
+            "📞 Служба поддержки всегда готова помочь вам!\n\n"
+            "Нажмите на кнопку ниже, чтобы связаться с нами:",
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=markup
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            "📞 Служба поддержки всегда готова помочь вам!\n\n"
+            "Нажмите на кнопку ниже, чтобы связаться с нами:",
+            reply_markup=markup
+        )
     
     logger.info(f"Пользователь {message.from_user.id} запросил контакт поддержки")
 
