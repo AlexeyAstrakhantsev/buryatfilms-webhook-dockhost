@@ -157,9 +157,6 @@ def create_payment_link(user_id, offer_id, periodicity, currency="RUB"):
 
 # Функция для отмены подписки
 def cancel_subscription(user_id, contract_id):
-    """
-    Отменяет подписку пользователя через API LAVA.TOP
-    """
     try:
         url = "https://gate.lava.top/api/v2/subscription/cancel"
         headers = {
@@ -167,18 +164,21 @@ def cancel_subscription(user_id, contract_id):
             "X-Api-Key": LAVA_API_KEY
         }
         
-        # Формируем тело запроса
         payload = {
-            "contractId": contract_id  # Используем contractId как параметр в теле запроса
+            "contractId": contract_id
         }
         
-        logger.info(f"Отправка запроса на отмену подписки для пользователя {user_id}, контракт {contract_id}")
+        logger.info(f"Отправка запроса на отмену подписки:")
+        logger.info(f"URL: {url}")
+        logger.info(f"Headers: {headers}")
+        logger.info(f"Payload: {payload}")
         
         response = requests.post(url, headers=headers, json=payload)
         
-        logger.info(f"Ответ от LAVA.TOP при отмене подписки: "
-                   f"Статус {response.status_code}, "
-                   f"Заголовки: {response.headers}")
+        logger.info(f"Ответ от LAVA.TOP:")
+        logger.info(f"Статус: {response.status_code}")
+        logger.info(f"Тело ответа: {response.text}")
+        logger.info(f"Заголовки: {response.headers}")
         
         if response.status_code == 200:
             logger.info(f"Подписка успешно отменена для пользователя {user_id}")
@@ -611,18 +611,28 @@ def start_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
+    # Проверяем статус подписки
+    subscription = check_subscription_status(user_id)
+    
     # Создаем inline-клавиатуру
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # Основные кнопки
-    btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
-    btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
-    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
-    
-    # Добавляем кнопки в клавиатуру
-    markup.add(btn_subscribe)
-    markup.add(btn_status)
-    markup.add(btn_support)
+    if subscription["status"] == "active":
+        # Кнопки для активной подписки
+        btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+        btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+        
+        # Добавляем кнопки в клавиатуру
+        markup.add(btn_status, btn_channel, btn_support)
+    else:
+        # Кнопки для неактивной подписки
+        btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+        btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+        
+        # Добавляем кнопки в клавиатуру
+        markup.add(btn_subscribe, btn_status, btn_support)
     
     bot.send_message(
         message.chat.id,

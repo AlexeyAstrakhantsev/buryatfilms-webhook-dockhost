@@ -49,11 +49,13 @@ class WebhookPayload(BaseModel):
     buyer: Buyer
     contractId: str
     parentContractId: Optional[str] = None
-    amount: float
-    currency: str
-    timestamp: str
-    status: str
-    errorMessage: str = ""
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    timestamp: Optional[str] = None
+    status: Optional[str] = None
+    errorMessage: Optional[str] = ""
+    cancelledAt: Optional[str] = None
+    willExpireAt: Optional[str] = None
 
 # Инициализация базы данных
 def init_db():
@@ -123,27 +125,62 @@ def save_to_db(payload: WebhookPayload, raw_data: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute('''
-    INSERT INTO payments (
-        event_type, product_id, product_title, buyer_email, contract_id, 
-        parent_contract_id, amount, currency, timestamp, status, 
-        error_message, raw_data, received_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        payload.eventType,
-        payload.product.id,
-        payload.product.title,
-        payload.buyer.email,
-        payload.contractId,
-        payload.parentContractId,
-        payload.amount,
-        payload.currency,
-        payload.timestamp,
-        payload.status,
-        payload.errorMessage,
-        raw_data,
-        datetime.now().isoformat()
-    ))
+    if payload.eventType == "subscription.cancelled":
+        # Для события отмены подписки
+        cursor.execute('''
+        INSERT INTO payments (
+            event_type, product_id, product_title, buyer_email, contract_id, 
+            parent_contract_id, timestamp, status, raw_data, received_at,
+            amount, currency
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            payload.eventType,
+            payload.product.id,
+            payload.product.title,
+            payload.buyer.email,
+            payload.contractId,
+            payload.parentContractId,
+            payload.cancelledAt,
+            'cancelled',
+            raw_data,
+            datetime.now().isoformat(),
+            0,  # amount для отмены не важен
+            'RUB'  # валюта для отмены не важна
+        ))
+        
+        # Обновляем статус в channel_members
+        cursor.execute('''
+        UPDATE channel_members 
+        SET status = 'cancelled',
+            subscription_end_date = ?
+        WHERE user_id = ? AND status = 'active'
+        ''', (
+            payload.willExpireAt,
+            payload.buyer.email.split('@')[0]
+        ))
+    else:
+        # Для остальных событий оставляем старую логику
+        cursor.execute('''
+        INSERT INTO payments (
+            event_type, product_id, product_title, buyer_email, contract_id, 
+            parent_contract_id, amount, currency, timestamp, status, 
+            error_message, raw_data, received_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            payload.eventType,
+            payload.product.id,
+            payload.product.title,
+            payload.buyer.email,
+            payload.contractId,
+            payload.parentContractId,
+            payload.amount,
+            payload.currency,
+            payload.timestamp,
+            payload.status,
+            payload.errorMessage,
+            raw_data,
+            datetime.now().isoformat()
+        ))
     
     conn.commit()
     conn.close()
