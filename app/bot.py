@@ -70,14 +70,11 @@ bot = telebot.TeleBot(BOT_TOKEN)
 @bot.message_handler(commands=['subscribe'])
 def subscribe_command(message):
     # Правильно получаем ID пользователя
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    username = message.from_user.username if hasattr(message, 'from_user') else None
-    
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
-
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
     
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+   
     # Проверяем, есть ли уже активная подписка
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
@@ -466,44 +463,49 @@ def check_new_payments():
 
 # Обновляем функцию update_db_structure
 def update_db_structure():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Создаем таблицу для платежей, если её нет
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type TEXT NOT NULL,
-        product_id TEXT NOT NULL,
-        product_title TEXT NOT NULL,
-        buyer_email TEXT NOT NULL,
-        contract_id TEXT NOT NULL,
-        parent_contract_id TEXT,
-        amount REAL NOT NULL,
-        currency TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error_message TEXT,
-        raw_data TEXT NOT NULL,
-        received_at TEXT NOT NULL,
-        processed INTEGER DEFAULT 0
-    )
-    ''')
-    
-    # Создаем таблицу для участников канала
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS channel_members (
-        user_id INTEGER PRIMARY KEY,
-        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'active',
-        subscription_end_date TIMESTAMP,
-        last_payment_id INTEGER,
-        FOREIGN KEY (last_payment_id) REFERENCES payments(id)
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Создаем таблицу payments, если её нет
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            product_title TEXT NOT NULL,
+            buyer_email TEXT NOT NULL,
+            contract_id TEXT NOT NULL,
+            parent_contract_id TEXT,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            raw_data TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            processed INTEGER DEFAULT 0
+        )
+        ''')
+        
+        # Создаем таблицу channel_members, если её нет
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channel_members (
+            user_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            joined_at TEXT NOT NULL,
+            expires_at TEXT,
+            subscription_end_date TEXT
+        )
+        ''')
+        
+        conn.commit()
+        logger.info("Структура базы данных успешно обновлена")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении структуры БД: {str(e)}")
+    finally:
+        conn.close()
 
 # Обработчики команд должны быть перед обработчиком текстовых сообщений
 
@@ -1380,3 +1382,4 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
+
