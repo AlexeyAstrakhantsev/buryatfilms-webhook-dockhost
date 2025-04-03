@@ -34,11 +34,11 @@ security = HTTPBasic()
 USERNAME = os.getenv("WEBHOOK_USERNAME", "admin")
 PASSWORD = os.getenv("WEBHOOK_PASSWORD", "password")
 DB_PATH = DATA_DIR / "lava_payments.db"
-MAIN_MESSAGE = os.getenv("MAIN_MESSAGE", 
-    "👋 Добро пожаловать!\n\n"
-    "Этот бот поможет вам управлять подпиской на закрытый канал.\n"
-    "Выберите действие из меню ниже:"
-)
+MAIN_MESSAGE = bytes(os.getenv("MAIN_MESSAGE", 
+    r"👋 Добро пожаловать!\n\n"
+    r"Этот бот поможет вам управлять подпиской на закрытый канал.\n"
+    r"Выберите действие из меню ниже:"
+), 'utf-8').decode('unicode_escape')
 
 # Модели данных
 class Product(BaseModel):
