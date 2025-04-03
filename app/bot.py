@@ -281,12 +281,13 @@ def add_user_to_channel(user_id):
             except:
                 end_date = None
             
-            # Добавляем или обновляем запись в channel_members
+            # Добавляем или обновляем запись в channel_members с текущей датой
+            current_time = datetime.now(timezone.utc).isoformat()
             cursor.execute('''
             INSERT OR REPLACE INTO channel_members 
-            (user_id, status, subscription_end_date, last_payment_id)
-            VALUES (?, 'active', ?, ?)
-            ''', (user_id, end_date, payment_id))
+            (user_id, status, joined_at, subscription_end_date, last_payment_id)
+            VALUES (?, 'active', ?, ?, ?)
+            ''', (user_id, current_time, end_date, payment_id))
             
             conn.commit()
         
@@ -355,73 +356,80 @@ def notify_admin(message):
 
 # Обновляем функцию check_new_payments для отправки уведомлений администратору
 def check_new_payments():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Получаем последние записи об успешных платежах, которые еще не обработаны
-    cursor.execute('''
-    SELECT id, buyer_email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp 
-    FROM payments 
-    WHERE processed = 0
-    ''')
-    
-    new_payments = cursor.fetchall()
-    
-    for payment in new_payments:
-        payment_id, email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp = payment
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=20)  # Увеличиваем timeout
+        cursor = conn.cursor()
         
-        # Извлекаем Telegram ID из email
-        user_id = email.split('@')[0]
+        # Получаем последние записи об успешных платежах, которые еще не обработаны
+        cursor.execute('''
+        SELECT id, buyer_email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp 
+        FROM payments 
+        WHERE processed = 0
+        ''')
         
-        try:
-            # Формируем сообщение для администратора
-            admin_message = f"<b>Новая операция по подписке</b>\n\n" \
-                           f"<b>Пользователь:</b> {user_id}\n" \
-                           f"<b>Продукт:</b> {product_title}\n" \
-                           f"<b>Сумма:</b> {amount} {currency}\n" \
-                           f"<b>Тип события:</b> {event_type}\n" \
-                           f"<b>Статус:</b> {status}\n" \
-                           f"<b>Дата:</b> {timestamp}\n" \
-                           f"<b>ID контракта:</b> {contract_id}"
+        new_payments = cursor.fetchall()
+        
+        for payment in new_payments:
+            payment_id, email, product_title, amount, currency, contract_id, parent_contract_id, event_type, status, timestamp = payment
             
-            # Отправляем уведомление администратору
-            notify_admin(admin_message)
+            # Извлекаем Telegram ID из email
+            user_id = email.split('@')[0]
             
-            # Если платеж успешный, отправляем уведомление пользователю и добавляем в канал
-            if status == 'subscription-active' or status == 'active':
-                # Отправляем уведомление пользователю
-                bot.send_message(
-                    user_id,
-                    f"Поздравляем! Ваша подписка '{product_title}' успешно оплачена.\n"
-                    f"Сумма: {amount} {currency}"
-                )
+            try:
+                # Формируем сообщение для администратора
+                admin_message = f"<b>Новая операция по подписке</b>\n\n" \
+                               f"<b>Пользователь:</b> {user_id}\n" \
+                               f"<b>Продукт:</b> {product_title}\n" \
+                               f"<b>Сумма:</b> {amount} {currency}\n" \
+                               f"<b>Тип события:</b> {event_type}\n" \
+                               f"<b>Статус:</b> {status}\n" \
+                               f"<b>Дата:</b> {timestamp}\n" \
+                               f"<b>ID контракта:</b> {contract_id}"
                 
-                # Добавляем пользователя в закрытый канал
-                add_user_to_channel(user_id)
+                # Отправляем уведомление администратору
+                notify_admin(admin_message)
                 
-                logger.info(f"Отправлено уведомление пользователю {user_id} об успешной оплате")
-            elif status == 'subscription-failed' or status == 'failed':
-                # Отправляем уведомление о неудачной оплате
-                cursor.execute('SELECT error_message FROM payments WHERE id = ?', (payment_id,))
-                error_message = cursor.fetchone()[0]
+                # Если платеж успешный, отправляем уведомление пользователю и добавляем в канал
+                if status == 'subscription-active' or status == 'active':
+                    # Отправляем уведомление пользователю
+                    bot.send_message(
+                        user_id,
+                        f"Поздравляем! Ваша подписка '{product_title}' успешно оплачена.\n"
+                        f"Сумма: {amount} {currency}"
+                    )
+                    
+                    # Добавляем пользователя в закрытый канал
+                    add_user_to_channel(user_id)
+                    
+                    logger.info(f"Отправлено уведомление пользователю {user_id} об успешной оплате")
+                elif status == 'subscription-failed' or status == 'failed':
+                    # Отправляем уведомление о неудачной оплате
+                    cursor.execute('SELECT error_message FROM payments WHERE id = ?', (payment_id,))
+                    error_message = cursor.fetchone()[0]
+                    
+                    bot.send_message(
+                        user_id,
+                        f"К сожалению, оплата подписки '{product_title}' не удалась.\n"
+                        f"Причина: {error_message}\n\n"
+                        f"Вы можете попробовать снова, используя команду /subscribe"
+                    )
+                    
+                    logger.info(f"Отправлено уведомление пользователю {user_id} о неудачной оплате")
                 
-                bot.send_message(
-                    user_id,
-                    f"К сожалению, оплата подписки '{product_title}' не удалась.\n"
-                    f"Причина: {error_message}\n\n"
-                    f"Вы можете попробовать снова, используя команду /subscribe"
-                )
+                # Отмечаем платеж как обработанный
+                cursor.execute('UPDATE payments SET processed = 1 WHERE id = ?', (payment_id,))
+                conn.commit()
                 
-                logger.info(f"Отправлено уведомление пользователю {user_id} о неудачной оплате")
-            
-            # Отмечаем платеж как обработанный
-            cursor.execute('UPDATE payments SET processed = 1 WHERE id = ?', (payment_id,))
-            conn.commit()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке платежа {payment_id}: {str(e)}")
-    
-    conn.close()
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e):
+                    logger.warning(f"База данных заблокирована, пропускаем обработку платежа {payment_id}")
+                    continue
+                raise
+            except Exception as e:
+                logger.error(f"Ошибка при обработке платежа {payment_id}: {str(e)}")
+                
+    finally:
+        conn.close()
 
 # Обработчики команд должны быть перед обработчиком текстовых сообщений
 
