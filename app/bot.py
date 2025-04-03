@@ -628,6 +628,68 @@ def start_command(message):
         parse_mode="HTML"
     )
 
+# Обработчик для кнопки "Статус подписки"
+@bot.callback_query_handler(func=lambda call: call.data == 'show_status')
+def show_status_callback(call):
+    try:
+        user_id = call.from_user.id
+        subscription = check_subscription_status(user_id)
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        if subscription["status"] == "active":
+            # Получаем дату окончания подписки
+            end_date = subscription.get("end_date")
+            end_date_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "не указана"
+            
+            message_text = (
+                "✅ У вас активная подписка!\n\n"
+                f"Дата окончания: {end_date_str}\n\n"
+                "Используйте кнопки ниже для управления подпиской:"
+            )
+            
+            # Кнопки для активной подписки
+            btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_channel, btn_support, btn_menu)
+            
+        else:
+            message_text = (
+                "❌ У вас нет активной подписки.\n\n"
+                "Оформите подписку, чтобы получить доступ к закрытому каналу!"
+            )
+            
+            # Кнопки для неактивной подписки
+            btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_subscribe, btn_support, btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                message_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                call.message.chat.id,
+                message_text,
+                reply_markup=markup
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Произошла ошибка при проверке статуса подписки. Попробуйте позже.",
+            reply_markup=markup
+        )
+
 # Обработчик для inline-кнопок основного меню
 @bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu'])
 def process_main_menu(call):
@@ -635,7 +697,7 @@ def process_main_menu(call):
         if call.data == 'show_subscribe':
             subscribe_command(call.message)
         elif call.data == 'show_status':
-            status_command(call.message)
+            show_status_callback(call)
         elif call.data == 'show_support':
             if SUPPORT_USERNAME:
                 bot.answer_callback_query(
