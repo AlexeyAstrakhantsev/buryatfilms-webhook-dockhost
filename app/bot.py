@@ -447,6 +447,98 @@ def update_db_structure():
 
 # Обработчики команд должны быть перед обработчиком текстовых сообщений
 
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
+    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+    
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        # Используем edit_message_text для callback и send_message для команды
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            try:
+                bot.edit_message_text(
+                    "У вас уже есть активная подписка!",
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    reply_markup=markup
+                )
+            except Exception as e:
+                bot.send_message(
+                    message.chat.id,
+                    "У вас уже есть активная подписка!",
+                    reply_markup=markup
+                )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
+            )
+        return
+    
+    # Получаем список доступных подписок
+    subscriptions = get_available_subscriptions()
+    if not subscriptions:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_menu)
+        
+        # Используем edit_message_text для callback и send_message для команды
+        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
+            try:
+                bot.edit_message_text(
+                    "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    reply_markup=markup
+                )
+            except Exception as e:
+                bot.send_message(
+                    message.chat.id,
+                    "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                    reply_markup=markup
+                )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
+                reply_markup=markup
+            )
+        return
+    
+    # Для каждой подписки создаем отдельное сообщение с кнопками периодов
+    for sub in subscriptions:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        # Создаем кнопки для каждого периода
+        for price in sub["prices"]:
+            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
+            rub_amount = price["currencies"].get("RUB", 0)
+            button_text = f"{period_text} - {rub_amount} ₽"
+            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
+            markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
+        
+        # Добавляем кнопку возврата в меню
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+        
+        message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
+        bot.send_message(
+            message.chat.id,
+            message_text,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -1380,81 +1472,3 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
-
-@bot.message_handler(commands=['subscribe'])
-def subscribe_command(message):
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    username = message.from_user.username if hasattr(message, 'from_user') else f"user_{user_id}"
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
-    
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
-    if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        # Используем edit_message_text для callback и send_message для команды
-        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            bot.edit_message_text(
-                "У вас уже есть активная подписка!",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=markup
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
-    
-    # Получаем список доступных подписок
-    subscriptions = get_available_subscriptions()
-    if not subscriptions:
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_menu)
-        
-        # Используем edit_message_text для callback и send_message для команды
-        if hasattr(message, 'message_id') and hasattr(message, 'chat'):
-            bot.edit_message_text(
-                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=markup
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "Произошла ошибка при получении списка подписок. Пожалуйста, попробуйте позже.",
-                reply_markup=markup
-            )
-        return
-    
-    # Для каждой подписки создаем отдельное сообщение с кнопками периодов
-    for sub in subscriptions:
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
-        # Создаем кнопки для каждого периода
-        for price in sub["prices"]:
-            period_text = PERIOD_TRANSLATIONS.get(price["periodicity"], price["periodicity"])
-            rub_amount = price["currencies"].get("RUB", 0)
-            button_text = f"{period_text} - {rub_amount} ₽"
-            callback_data = f"pay|{sub['offer_id']}|{price['periodicity']}"
-            markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
-        
-        # Добавляем кнопку возврата в меню
-        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
-        
-        message_text = f"<b>{sub['name']}</b>\n\n{sub['description']}\n\nВыберите период подписки:"
-        bot.send_message(
-            message.chat.id,
-            message_text,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
