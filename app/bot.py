@@ -945,32 +945,57 @@ def status_command(message):
             reply_markup=markup
         )
 
-# Добавляем обработчик callback-запросов для кнопки отмены подписки
+# Обработчик для кнопки отмены подписки
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
     try:
         contract_id = call.data.split('_')[1]
         user_id = call.from_user.id
+        subscription = check_subscription_status(user_id)
         
-        # Отменяем подписку
-        if cancel_subscription(user_id, contract_id):
-            # Обновляем сообщение после отмены
+        # Если это первый шаг (запрос подтверждения)
+        if not call.data.endswith('_confirmed'):
+            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
+                                                   callback_data=f"cancel_{contract_id}_confirmed")
+            btn_back = types.InlineKeyboardButton('🔙 Нет, вернуться', 
+                                                callback_data='show_status')
+            markup.add(btn_confirm, btn_back)
+            
             bot.edit_message_text(
-                "✅ Ваша подписка успешно отменена.\n"
-                "Для оформления новой подписки используйте команду /subscribe",
+                f"⚠️ Вы уверены, что хотите отписаться?\n\n"
+                f"При отписке доступ к каналу останется до {end_date_str}.\n"
+                f"После этой даты автопродление будет отключено.",
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                reply_markup=None
-            )
-            # Отправляем новую клавиатуру
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add(types.KeyboardButton('Оформить подписку'))
-            markup.add(types.KeyboardButton('Статус подписки'))
-            markup.add(types.KeyboardButton('Поддержка'))
-            bot.send_message(
-                call.message.chat.id,
-                "Выберите действие:",
                 reply_markup=markup
+            )
+            return
+        
+        # Если это подтверждение отмены
+        if cancel_subscription(user_id, contract_id):
+            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_menu)
+            
+            bot.edit_message_text(
+                f"✅ Автопродление подписки отключено.\n\n"
+                f"Доступ к каналу сохранится до {end_date_str}.\n"
+                f"После этой даты вы сможете оформить новую подписку.",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
+            
+            # Уведомляем админа
+            notify_admin(
+                f"🔔 <b>Отмена подписки</b>\n\n"
+                f"Пользователь: {user_id}\n"
+                f"Доступ активен до: {end_date_str}"
             )
         else:
             bot.answer_callback_query(
