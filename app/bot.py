@@ -601,7 +601,7 @@ def show_main_menu(message):
     
     try:
         bot.edit_message_text(
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀Выберите пункт меню:⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+            "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
             chat_id=message.chat.id,
             message_id=message.message_id,
             reply_markup=markup,
@@ -610,7 +610,7 @@ def show_main_menu(message):
     except Exception as e:
         bot.send_message(
             message.chat.id,
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀Выберите пункт меню:⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+            "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
             reply_markup=markup,
             parse_mode="HTML"
         )
