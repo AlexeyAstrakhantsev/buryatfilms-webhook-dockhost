@@ -657,52 +657,47 @@ def show_status_callback(call):
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
         
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
         if subscription["status"] == "active":
             # Получаем дату окончания подписки
             end_date = subscription.get("end_date")
             end_date_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "не указана"
             
-            message_text = (
+            # Отправляем информацию о подписке
+            bot.send_message(
+                call.message.chat.id,
                 "✅ У вас активная подписка!\n\n"
-                f"Дата окончания: {end_date_str}\n\n"
-                "Используйте кнопки ниже для управления подпиской:"
+                f"Дата окончания: {end_date_str}"
             )
-            
-            # Кнопки для активной подписки
+        else:
+            # Отправляем информацию об отсутствии подписки
+            bot.send_message(
+                call.message.chat.id,
+                "❌ У вас нет активной подписки.\n\n"
+                "Оформите подписку, чтобы получить доступ к закрытому каналу!"
+            )
+        
+        # Показываем меню с кнопками управления
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        if subscription["status"] == "active":
             btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
             btn_cancel = types.InlineKeyboardButton('❌ Отменить подписку', 
                                                   callback_data=f"cancel_{subscription['contract_id']}")
             btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
             markup.add(btn_channel, btn_cancel, btn_support, btn_menu)
-            
         else:
-            message_text = (
-                "❌ У вас нет активной подписки.\n\n"
-                "Оформите подписку, чтобы получить доступ к закрытому каналу!"
-            )
-            
-            # Кнопки для неактивной подписки
             btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
             btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
             markup.add(btn_subscribe, btn_support, btn_menu)
         
-        try:
-            bot.edit_message_text(
-                message_text,
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=markup
-            )
-        except Exception as e:
-            bot.send_message(
-                call.message.chat.id,
-                message_text,
-                reply_markup=markup
-            )
+        # Отправляем меню отдельным сообщением
+        bot.send_message(
+            call.message.chat.id,
+            "Выберите действие:",
+            reply_markup=markup
+        )
             
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
@@ -1115,7 +1110,14 @@ def start_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
-    # Используем общую функцию для показа меню
+    # Сначала отправляем приветственное сообщение
+    bot.send_message(
+        message.chat.id,
+        "👋 Добро пожаловать в бот для подписки на закрытый канал с бурятскими мультфильмами и сериалами!",
+        parse_mode="HTML"
+    )
+    
+    # Затем показываем меню
     show_main_menu(message)
 
 # Функция для периодической проверки новых платежей
