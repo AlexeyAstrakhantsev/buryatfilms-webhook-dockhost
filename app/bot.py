@@ -648,7 +648,7 @@ def show_about_callback(call):
     # Отправляем меню отдельным сообщением
     bot.send_message(
         call.message.chat.id,
-        "Выберите действие:",
+        "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
         reply_markup=markup
     )
 
@@ -700,7 +700,7 @@ def show_status_callback(call):
         # Отправляем меню отдельным сообщением
         bot.send_message(
             call.message.chat.id,
-            "Выберите действие:",
+            "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
             reply_markup=markup
         )
             
