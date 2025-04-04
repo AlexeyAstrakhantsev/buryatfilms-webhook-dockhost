@@ -601,17 +601,16 @@ def show_main_menu(message):
     
     try:
         bot.edit_message_text(
-            MAIN_MESSAGE,
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀Выберите пункт меню:⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
             chat_id=message.chat.id,
             message_id=message.message_id,
             reply_markup=markup,
             parse_mode="HTML"
         )
     except Exception as e:
-        # Если не удалось отредактировать, отправляем новое сообщение
         bot.send_message(
             message.chat.id,
-            MAIN_MESSAGE,
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀Выберите пункт меню:⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
             reply_markup=markup,
             parse_mode="HTML"
         )
@@ -635,23 +634,23 @@ def show_about_callback(call):
 Вместе мы создадим индустрию бурятского кино.
 Сделаем родной язык — модным, сильным и вечным."""
 
+    # Отправляем информацию о канале
+    bot.send_message(
+        call.message.chat.id,
+        about_text
+    )
+
+    # Показываем меню
     markup = types.InlineKeyboardMarkup(row_width=1)
     btn_back = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
     markup.add(btn_back)
 
-    try:
-        bot.edit_message_text(
-            about_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=markup
-        )
-    except Exception as e:
-        bot.send_message(
-            call.message.chat.id,
-            about_text,
-            reply_markup=markup
-        )
+    # Отправляем меню отдельным сообщением
+    bot.send_message(
+        call.message.chat.id,
+        "Выберите действие:",
+        reply_markup=markup
+    )
 
 # Обработчик для кнопки "Статус подписки"
 @bot.callback_query_handler(func=lambda call: call.data == 'show_status')
@@ -1116,10 +1115,10 @@ def start_command(message):
     
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
-    # Сначала отправляем приветственное сообщение
+    # Отправляем приветственное сообщение
     bot.send_message(
         message.chat.id,
-        "👋 Добро пожаловать в бот для подписки на закрытый канал с бурятскими мультфильмами и сериалами!",
+        MAIN_MESSAGE,
         parse_mode="HTML"
     )
     
