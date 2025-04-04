@@ -571,52 +571,6 @@ def show_subscription_menu(message):
                 parse_mode="HTML"
             )
 
-# Обработчик для команды /subscribe
-@bot.message_handler(commands=['subscribe'])
-def subscribe_command(message):
-    # Правильно получаем ID пользователя
-    user_id = message.from_user.id
-    username = message.from_user.username or f"user_{user_id}"
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
-   
-    # Проверяем, есть ли уже активная подписка
-    subscription = check_subscription_status(user_id)
-    if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        try:
-            bot.edit_message_text(
-                "У вас уже есть активная подписка!",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=markup
-            )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
-    
-    show_subscription_menu(message)
-
-# Обработчик для команды /start
-@bot.message_handler(commands=['start'])
-def start_command(message):
-    user_id = message.from_user.id
-    username = message.from_user.username or f"user_{user_id}"
-    
-    logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
-    
-    # Используем общую функцию для показа меню
-    show_main_menu(message)
-
 # Функция для показа главного меню
 def show_main_menu(message):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -695,6 +649,98 @@ def show_about_callback(call):
             about_text,
             reply_markup=markup
         )
+
+# Обработчик для кнопки "Статус подписки"
+@bot.callback_query_handler(func=lambda call: call.data == 'show_status')
+def show_status_callback(call):
+    try:
+        user_id = call.from_user.id
+        subscription = check_subscription_status(user_id)
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        if subscription["status"] == "active":
+            # Получаем дату окончания подписки
+            end_date = subscription.get("end_date")
+            end_date_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "не указана"
+            
+            message_text = (
+                "✅ У вас активная подписка!\n\n"
+                f"Дата окончания: {end_date_str}\n\n"
+                "Используйте кнопки ниже для управления подпиской:"
+            )
+            
+            # Кнопки для активной подписки
+            btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+            btn_cancel = types.InlineKeyboardButton('❌ Отменить подписку', 
+                                                  callback_data=f"cancel_{subscription['contract_id']}")
+            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_channel, btn_cancel, btn_support, btn_menu)
+            
+        else:
+            message_text = (
+                "❌ У вас нет активной подписки.\n\n"
+                "Оформите подписку, чтобы получить доступ к закрытому каналу!"
+            )
+            
+            # Кнопки для неактивной подписки
+            btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
+            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_subscribe, btn_support, btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                message_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                call.message.chat.id,
+                message_text,
+                reply_markup=markup
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Произошла ошибка при проверке статуса подписки. Попробуйте позже.",
+            reply_markup=markup
+        )
+
+# Обработчик для inline-кнопок основного меню
+@bot.callback_query_handler(func=lambda call: call.data in ['show_subscribe', 'show_status', 'show_support', 'show_menu'])
+def process_main_menu(call):
+    try:
+        if call.data == 'show_subscribe':
+            subscribe_command(call.message)
+        elif call.data == 'show_status':
+            show_status_callback(call)
+        elif call.data == 'show_support':
+            if SUPPORT_USERNAME:
+                bot.answer_callback_query(
+                    call.id,
+                    "Перенаправляем в чат поддержки...",
+                    show_alert=False
+                )
+            else:
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Извините, служба поддержки временно недоступна",
+                    show_alert=True
+                )
+        elif call.data == 'show_menu':
+            show_main_menu(call.message)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обработке кнопки меню: {str(e)}")
+        bot.answer_callback_query(call.id, "Произошла ошибка. Попробуйте позже.")
 
 # Добавляем функцию для расчета оставшихся дней подписки
 def calculate_days_left(timestamp, periodicity):
@@ -885,399 +931,51 @@ def status_command(message):
             reply_markup=markup
         )
 
-# Обработчик для кнопки отмены подписки
-@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
-def cancel_subscription_callback(call):
-    try:
-        contract_id = call.data.split('_')[1]
-        user_id = call.from_user.id
-        subscription = check_subscription_status(user_id)
+# Обработчик для команды /subscribe
+@bot.message_handler(commands=['subscribe'])
+def subscribe_command(message):
+    # Правильно получаем ID пользователя
+    user_id = message.from_user.id
+    username = message.from_user.username or f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запросил оформление подписки")
+   
+    # Проверяем, есть ли уже активная подписка
+    subscription = check_subscription_status(user_id)
+    if subscription["status"] == "active":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
         
-        # Если это первый шаг (запрос подтверждения)
-        if not call.data.endswith('_confirmed'):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
-                                                   callback_data=f"cancel_{contract_id}_confirmed")
-            btn_back = types.InlineKeyboardButton('🔙 Нет, вернуться', 
-                                                callback_data='show_status')
-            markup.add(btn_confirm, btn_back)
-            
+        try:
             bot.edit_message_text(
-                f"⚠️ Вы уверены, что хотите отписаться?\n\n"
-                f"При отписке доступ к каналу останется до {end_date_str}.\n"
-                f"Автопродление будет отключено.",
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
                 reply_markup=markup
             )
-            return
-        
-        # Если это подтверждение отмены
-        if cancel_subscription(user_id, contract_id):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-            markup.add(btn_menu)
-            
-            bot.edit_message_text(
-                f"✅ Автопродление подписки отключено.\n\n"
-                f"Доступ к каналу сохранится до {end_date_str}.\n"
-                f"После этой даты вы сможете оформить новую подписку. Мы всегда рады видеть Вас снова!",
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=markup
-            )
-            
-            # Уведомляем админа
-            notify_admin(
-                f"🔔 <b>Отмена подписки</b>\n\n"
-                f"Пользователь: {user_id}\n"
-                f"Доступ активен до: {end_date_str}"
-            )
-        else:
-            bot.answer_callback_query(
-                call.id,
-                "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
-            )
-    except Exception as e:
-        logger.error(f"Ошибка при обработке отмены подписки: {str(e)}")
-        bot.answer_callback_query(
-            call.id,
-            "❌ Произошла ошибка при отмене подписки"
-        )
-
-# Обработчик для выбора периода оплаты
-@bot.callback_query_handler(func=lambda call: call.data.startswith('p|'))
-def process_payment_callback(call):
-    try:
-        # Получаем ID пользователя из callback
-        user_id = call.from_user.id
-        
-        # Разбираем данные из callback
-        parts = call.data.split('|')
-        if len(parts) != 3:
-            raise ValueError("Неверный формат данных callback")
-        
-        _, offer_id, short_period = parts
-        
-        # Преобразуем короткий период обратно в полный
-        period_map = {
-            "1m": "MONTHLY",
-            "3m": "PERIOD_90_DAYS",
-            "6m": "PERIOD_180_DAYS",
-            "1y": "PERIOD_YEAR"
-        }
-        periodicity = period_map.get(short_period, short_period)
-        
-        # Получаем информацию о подписке для отображения цен
-        subscriptions = get_available_subscriptions()
-        if not subscriptions:
-            raise ValueError("Не удалось получить информацию о подписке")
-        
-        # Ищем нужную подписку и период
-        subscription = next((sub for sub in subscriptions if sub["offer_id"] == offer_id), None)
-        if not subscription:
-            raise ValueError("Подписка не найдена")
-        
-        price_info = next((p for p in subscription["prices"] if p["periodicity"] == periodicity), None)
-        if not price_info:
-            raise ValueError("Информация о ценах не найдена")
-        
-        # Создаем кнопки выбора валюты
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
-        # Добавляем кнопки для каждой доступной валюты
-        for currency, amount in price_info["currencies"].items():
-            currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
-            button_text = f"Оплатить {amount} {currency_symbol}"
-            callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
-            markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
-        
-        # Добавляем кнопку "Назад"
-        markup.add(types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe'))
-        
-        period_text = PERIOD_TRANSLATIONS.get(periodicity, periodicity)
-        bot.edit_message_text(
-            f"Выберите способ оплаты подписки на {period_text}:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обработке callback выбора периода: {str(e)}")
-        bot.answer_callback_query(
-            call.id,
-            "Произошла ошибка. Пожалуйста, попробуйте позже."
-        )
-
-# Обработчик для выбора валюты оплаты
-@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
-def process_currency_callback(call):
-    try:
-        # Получаем ID пользователя из callback
-        user_id = call.from_user.id
-        logger.info(f"Обработка выбора валюты для пользователя {user_id}")
-        
-        # Разбираем данные из callback
-        parts = call.data.split('|')
-        if len(parts) != 4:
-            raise ValueError("Неверный формат данных callback")
-        
-        _, offer_id, periodicity, currency = parts
-        logger.info(f"Параметры платежа: offer_id={offer_id}, periodicity={periodicity}, currency={currency}")
-        
-        # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
-        logger.info(f"Получены данные для оплаты: {payment_data}")
-        
-        if not payment_data:
-            raise ValueError("Не удалось создать ссылку на оплату")
-        
-        # Получаем ссылку из ответа
-        payment_url = payment_data.get('paymentUrl')
-        if not payment_url:
-            raise ValueError("В ответе отсутствует ссылка на оплату")
-        
-        logger.info(f"Создана ссылка на оплату: {payment_url}")
-        
-        # Создаем клавиатуру с кнопками
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
-        back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
-        markup.add(pay_button)
-        markup.add(back_button)
-        
-        # Отправляем сообщение с кнопкой оплаты
-        bot.edit_message_text(
-            "Для оплаты подписки нажмите на кнопку ниже:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-        
-        # Отмечаем callback как обработанный
-        bot.answer_callback_query(call.id)
-        
-        # Логируем успешное создание ссылки
-        logger.info(f"Успешно создана ссылка на оплату для пользователя {user_id}")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при создании ссылки на оплату: {str(e)}", exc_info=True)
-        bot.answer_callback_query(
-            call.id,
-            "Произошла ошибка при создании ссылки на оплату. Попробуйте позже."
-        )
-
-# Обработчик для показа подробной статистики
-@bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_stats')
-def show_detailed_stats(call):
-    if str(call.from_user.id) != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Эта функция доступна только администратору")
-        return
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Получаем активных пользователей с деталями
-        cursor.execute('''
-        WITH LastPayments AS (
-            SELECT 
-                buyer_email,
-                status,
-                timestamp,
-                event_type,
-                ROW_NUMBER() OVER (PARTITION BY buyer_email ORDER BY timestamp DESC) as rn
-            FROM payments
-            WHERE event_type IN ('payment.success', 'subscription.recurring.payment.success')
-        )
-        SELECT 
-            REPLACE(buyer_email, '@t.me', '') as user_id,
-            status,
-            timestamp,
-            event_type
-        FROM LastPayments
-        WHERE rn = 1
-        ORDER BY timestamp DESC
-        LIMIT 50
-        ''')
-        
-        active_users = cursor.fetchall()
-        
-        # Формируем подробный отчет
-        detailed_stats = "📋 <b>Подробная статистика по пользователям</b>\n\n"
-        
-        for user in active_users:
-            user_id = user[0]
-            status = user[1]
-            timestamp = datetime.fromisoformat(user[2].replace('Z', '+00:00')).strftime("%d.%m.%Y %H:%M")
-            event_type = "🔄 Продление" if 'recurring' in user[3] else "💳 Первая оплата"
-            
-            status_emoji = "✅" if status in ['subscription-active', 'active'] else "❌"
-            
-            detailed_stats += (
-                f"{status_emoji} <a href='tg://user?id={user_id}'>Пользователь {user_id}</a>\n"
-                f"Статус: {status}\n"
-                f"Последнее событие: {event_type}\n"
-                f"Дата: {timestamp}\n"
-                "➖➖➖➖➖➖➖➖➖➖\n"
-            )
-        
-        # Разбиваем на части, если сообщение слишком длинное
-        if len(detailed_stats) > 4096:
-            for x in range(0, len(detailed_stats), 4096):
-                part = detailed_stats[x:x+4096]
-                bot.send_message(
-                    call.message.chat.id,
-                    part,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-        else:
-            bot.send_message(
-                call.message.chat.id,
-                detailed_stats,
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
-        
-        bot.answer_callback_query(call.id)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении подробной статистики: {str(e)}")
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка при получении статистики")
-    finally:
-        conn.close()
-
-# Обработчик для команды /stat
-@bot.message_handler(commands=['stat'])
-def stat_command(message):
-    # Проверяем, что команду отправил администратор
-    if str(message.from_user.id) != ADMIN_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору")
-        return
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Получаем общую статистику
-        cursor.execute('''
-        SELECT 
-            COUNT(DISTINCT buyer_email) as total_users,
-            COUNT(DISTINCT CASE WHEN event_type = 'payment.success' THEN buyer_email END) as unique_paid,
-            COUNT(DISTINCT CASE WHEN event_type = 'subscription.recurring.payment.success' THEN buyer_email END) as unique_renewed,
-            COUNT(CASE WHEN event_type = 'payment.success' THEN 1 END) as total_payments,
-            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.success' THEN 1 END) as total_renewals,
-            COUNT(CASE WHEN event_type = 'payment.failed' THEN 1 END) as failed_payments,
-            COUNT(CASE WHEN event_type = 'subscription.recurring.payment.failed' THEN 1 END) as failed_renewals
-        FROM payments
-        ''')
-        
-        stats = cursor.fetchone()
-        
-        # Получаем количество активных подписок
-        cursor.execute('''
-        SELECT COUNT(*) 
-        FROM channel_members 
-        WHERE status = 'active'
-        ''')
-        active_subs = cursor.fetchone()[0]
-        
-        # Формируем краткую статистику
-        summary = (
-            "📊 <b>Статистика подписок</b>\n\n"
-            f"👥 Всего пользователей: {stats[0]}\n"
-            f"✅ Активных подписок: {active_subs}\n"
-            f"💳 Уникальных оплат: {stats[1]}\n"
-            f"🔄 Уникальных продлений: {stats[2]}\n"
-            f"📈 Всего успешных оплат: {stats[3]}\n"
-            f"📊 Всего успешных продлений: {stats[4]}\n"
-            f"❌ Неудачных оплат: {stats[5]}\n"
-            f"⚠️ Неудачных продлений: {stats[6]}\n\n"
-            "Для подробной информации нажмите кнопку ниже:"
-        )
-        
-        # Создаем клавиатуру
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_details = types.InlineKeyboardButton('📋 Подробная статистика', callback_data='show_detailed_stats')
-        markup.add(btn_details)
-        
-        bot.reply_to(message, summary, parse_mode="HTML", reply_markup=markup)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении статистики: {str(e)}")
-        bot.reply_to(message, "❌ Произошла ошибка при получении статистики")
-    finally:
-        conn.close()
-
-# Обновляем обработчик текстовых сообщений
-@bot.message_handler(content_types=['text'])
-def text_handler(message):
-    if message.text == 'Оформить подписку':
-        subscribe_command(message)
-    elif message.text == 'Статус подписки':
-        status_command(message)
-    elif message.text == 'Подробнее о канале':
-        show_about_callback(types.CallbackQuery(
-            id='dummy',
-            from_user=message.from_user,
-            message=message,
-            data='show_about'
-        ))
-    elif message.text == 'Поддержка':
-        if SUPPORT_USERNAME:
+        except Exception as e:
             bot.send_message(
                 message.chat.id,
-                f"📞 Напишите нам: @{SUPPORT_USERNAME}",
-                disable_web_page_preview=True
+                "У вас уже есть активная подписка!",
+                reply_markup=markup
             )
-        else:
-            bot.reply_to(message, "❌ Извините, служба поддержки временно недоступна")
-    elif message.text == 'Перейти в канал':
-        if CHANNEL_LINK:
-            bot.reply_to(
-                message,
-                f"🔗 Ссылка для входа в канал:\n{CHANNEL_LINK}",
-                disable_web_page_preview=True
-            )
-        else:
-            bot.reply_to(message, "❌ Ссылка на канал не настроена")
-    else:
-        # Проверяем, является ли сообщение командой
-        if message.text.startswith('/'):
-            available_commands = [
-                "/start - начать работу с ботом",
-                "/subscribe - оформить подписку",
-                "/status - проверить статус подписки"
-            ]
-            
-            # Добавляем админские команды, если сообщение от админа
-            if str(message.from_user.id) == ADMIN_ID:
-                available_commands.extend([
-                    "/stat - статистика подписок",
-                    "/test - тестовый платеж",
-                    "/test_fail - тестовый неуспешный платеж",
-                    "/test_expire - тестовая истекшая подписка"
-                ])
-            
-            bot.reply_to(
-                message, 
-                "Неизвестная команда.\nДоступные команды:\n" + "\n".join(available_commands)
-            )
-        else:
-            bot.reply_to(
-                message, 
-                "Используйте кнопки меню или команды:\n" + "\n".join([
-                    "/start - начать работу с ботом",
-                    "/subscribe - оформить подписку",
-                    "/status - проверить статус подписки"
-                ])
-            )
+        return
+    
+    show_subscription_menu(message)
+
+# Обработчик для команды /start
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or f"user_{user_id}"
+    
+    logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
+    
+    # Используем общую функцию для показа меню
+    show_main_menu(message)
 
 # Функция для периодической проверки новых платежей
 def check_payments_periodically():
