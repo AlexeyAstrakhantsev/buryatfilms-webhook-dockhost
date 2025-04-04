@@ -614,6 +614,74 @@ def show_main_menu(message):
             reply_markup=markup,
             parse_mode="HTML"
         )
+# Обработчик для кнопки отмены подписки
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
+def cancel_subscription_callback(call):
+    try:
+        contract_id = call.data.split('_')[1]
+        user_id = call.from_user.id
+        subscription = check_subscription_status(user_id)
+        
+        # Если это первый шаг (запрос подтверждения)
+        if not call.data.endswith('_confirmed'):
+            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
+                                                   callback_data=f"cancel_{contract_id}_confirmed")
+            btn_back = types.InlineKeyboardButton('🔙 Нет, вернуться', 
+                                                callback_data='show_status')
+            markup.add(btn_confirm, btn_back)
+            
+            # Удаляем предыдущее сообщение с меню
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            
+            # Отправляем запрос подтверждения
+            bot.send_message(
+                call.message.chat.id,
+                f"⚠️ Вы уверены, что хотите отписаться?\n\n"
+                f"При отписке доступ к каналу останется до {end_date_str}.\n"
+                f"Автопродление будет отключено.",
+                reply_markup=markup
+            )
+            return
+        
+        # Если это подтверждение отмены
+        if cancel_subscription(user_id, contract_id):
+            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            
+            # Удаляем предыдущее сообщение с меню
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            
+            # Отправляем сообщение об успешной отмене
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ Автопродление подписки отключено.\n\n"
+                f"Доступ к каналу сохранится до {end_date_str}.\n"
+                f"После этой даты вы сможете оформить новую подписку. Мы всегда рады видеть Вас снова!"
+            )
+            
+            # Показываем главное меню
+            show_main_menu(call.message)
+            
+            # Уведомляем админа
+            notify_admin(
+                f"🔔 <b>Отмена подписки</b>\n\n"
+                f"Пользователь: {user_id}\n"
+                f"Доступ активен до: {end_date_str}"
+            )
+        else:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке отмены подписки: {str(e)}")
+        bot.answer_callback_query(
+            call.id,
+            "❌ Произошла ошибка при отмене подписки"
+        )
+
 
 # Обработчик для кнопки "Подробнее о канале"
 @bot.callback_query_handler(func=lambda call: call.data == 'show_about')
@@ -1219,72 +1287,4 @@ if __name__ == "__main__":
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
-
-# Обработчик для кнопки отмены подписки
-@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
-def cancel_subscription_callback(call):
-    try:
-        contract_id = call.data.split('_')[1]
-        user_id = call.from_user.id
-        subscription = check_subscription_status(user_id)
-        
-        # Если это первый шаг (запрос подтверждения)
-        if not call.data.endswith('_confirmed'):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
-                                                   callback_data=f"cancel_{contract_id}_confirmed")
-            btn_back = types.InlineKeyboardButton('🔙 Нет, вернуться', 
-                                                callback_data='show_status')
-            markup.add(btn_confirm, btn_back)
-            
-            # Удаляем предыдущее сообщение с меню
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            
-            # Отправляем запрос подтверждения
-            bot.send_message(
-                call.message.chat.id,
-                f"⚠️ Вы уверены, что хотите отписаться?\n\n"
-                f"При отписке доступ к каналу останется до {end_date_str}.\n"
-                f"Автопродление будет отключено.",
-                reply_markup=markup
-            )
-            return
-        
-        # Если это подтверждение отмены
-        if cancel_subscription(user_id, contract_id):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
-            
-            # Удаляем предыдущее сообщение с меню
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            
-            # Отправляем сообщение об успешной отмене
-            bot.send_message(
-                call.message.chat.id,
-                f"✅ Автопродление подписки отключено.\n\n"
-                f"Доступ к каналу сохранится до {end_date_str}.\n"
-                f"После этой даты вы сможете оформить новую подписку. Мы всегда рады видеть Вас снова!"
-            )
-            
-            # Показываем главное меню
-            show_main_menu(call.message)
-            
-            # Уведомляем админа
-            notify_admin(
-                f"🔔 <b>Отмена подписки</b>\n\n"
-                f"Пользователь: {user_id}\n"
-                f"Доступ активен до: {end_date_str}"
-            )
-        else:
-            bot.answer_callback_query(
-                call.id,
-                "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
-            )
-    except Exception as e:
-        logger.error(f"Ошибка при обработке отмены подписки: {str(e)}")
-        bot.answer_callback_query(
-            call.id,
-            "❌ Произошла ошибка при отмене подписки"
-        )
 
