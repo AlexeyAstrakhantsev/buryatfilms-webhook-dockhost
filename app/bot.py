@@ -616,9 +616,12 @@ def show_main_menu(message):
             parse_mode="HTML"
         )
 
-# Добавляем новый обработчик для кнопки "Подробнее о канале"
+# Обработчик для кнопки "Подробнее о канале"
 @bot.callback_query_handler(func=lambda call: call.data == 'show_about')
 def show_about_callback(call):
+    # Удаляем предыдущее сообщение с меню
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    
     about_text = """В ЗАКРЫТОМ КАНАЛЕ:
 
 ✅ Хиты на бурятском — «Шрек», «Кунг-фу Панда» и другие любимые мультфильмы. Мы постоянно пополняем коллекцию.
@@ -654,6 +657,9 @@ def show_about_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_status')
 def show_status_callback(call):
     try:
+        # Удаляем предыдущее сообщение с меню
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
         
