@@ -743,21 +743,25 @@ def show_main_menu(message):
     # Проверяем статус подписки для определения доступных кнопок
     subscription = check_subscription_status(message.chat.id)
     
+    # Добавляем общие кнопки, которые видны всем
+    btn_about = types.InlineKeyboardButton('🔍 Подробнее о канале', callback_data='show_about')
+    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+    
     if subscription["status"] == "active":
         # Кнопки для активной подписки
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
         btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
-        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
         markup.add(btn_status)
         markup.add(btn_channel)
+        markup.add(btn_about)
         markup.add(btn_support)
     else:
         # Кнопки для неактивной подписки
         btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
-        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
         markup.add(btn_subscribe)
         markup.add(btn_status)
+        markup.add(btn_about)
         markup.add(btn_support)
     
     try:
@@ -775,6 +779,40 @@ def show_main_menu(message):
             MAIN_MESSAGE,
             reply_markup=markup,
             parse_mode="HTML"
+        )
+
+# Добавляем новый обработчик для кнопки "Подробнее о канале"
+@bot.callback_query_handler(func=lambda call: call.data == 'show_about')
+def show_about_callback(call):
+    about_text = """В ЗАКРЫТОМ КАНАЛЕ:
+
+✅ Хиты на бурятском — «Шрек», «Кунг-фу Панда» и другие любимые мультфильмы. Мы постоянно пополняем коллекцию.
+
+✅ Новые серии анимэ каждую неделю — только для подписчиков.
+
+🎁 Розыгрыши призов каждый месяц — благодарим тех, кто поддерживает проект.
+
+✅ Вы — наш генеральный партнёр. Ваша подписка помогает создавать новые мультфильмы и фильмы на бурятском языке.
+
+Вместе мы создадим индустрию бурятского кино.
+Сделаем родной язык — модным, сильным и вечным."""
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_back = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+    markup.add(btn_back)
+
+    try:
+        bot.edit_message_text(
+            about_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=markup
+        )
+    except Exception as e:
+        bot.send_message(
+            call.message.chat.id,
+            about_text,
+            reply_markup=markup
         )
 
 # Добавляем функцию для расчета оставшихся дней подписки
@@ -1296,13 +1334,20 @@ def stat_command(message):
     finally:
         conn.close()
 
-# Обработчик текстовых сообщений
+# Обновляем обработчик текстовых сообщений
 @bot.message_handler(content_types=['text'])
 def text_handler(message):
     if message.text == 'Оформить подписку':
         subscribe_command(message)
     elif message.text == 'Статус подписки':
         status_command(message)
+    elif message.text == 'Подробнее о канале':
+        show_about_callback(types.CallbackQuery(
+            id='dummy',
+            from_user=message.from_user,
+            message=message,
+            data='show_about'
+        ))
     elif message.text == 'Поддержка':
         if SUPPORT_USERNAME:
             bot.send_message(
