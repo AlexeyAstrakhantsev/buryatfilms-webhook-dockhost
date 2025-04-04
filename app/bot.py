@@ -786,7 +786,9 @@ def process_payment_callback(call):
         for currency, amount in price_info["currencies"].items():
             currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
             button_text = f"Оплатить {amount} {currency_symbol}"
-            callback_data = f"currency|{offer_id}|{periodicity}|{currency}"
+            # Сокращаем offer_id до первых 20 символов, этого должно быть достаточно для уникальности
+            short_offer_id = offer_id[:20]
+            callback_data = f"c|{short_offer_id}|{short_period}|{currency}"
             markup.add(types.InlineKeyboardButton(text=button_text, callback_data=callback_data))
         
         # Добавляем кнопку "Назад"
@@ -807,8 +809,8 @@ def process_payment_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
-# Обработчик для выбора валюты оплаты
-@bot.callback_query_handler(func=lambda call: call.data.startswith('currency|'))
+# Обработчик для выбора валюты оплаты (обновляем для соответствия новому формату)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('c|'))
 def process_currency_callback(call):
     try:
         # Получаем ID пользователя из callback
@@ -820,11 +822,27 @@ def process_currency_callback(call):
         if len(parts) != 4:
             raise ValueError("Неверный формат данных callback")
         
-        _, offer_id, periodicity, currency = parts
-        logger.info(f"Параметры платежа: offer_id={offer_id}, periodicity={periodicity}, currency={currency}")
+        _, short_offer_id, short_period, currency = parts
         
-        # Создаем ссылку на оплату
-        payment_data = create_payment_link(user_id, offer_id, periodicity, currency)
+        # Получаем полный offer_id
+        subscriptions = get_available_subscriptions()
+        full_offer_id = next((sub["offer_id"] for sub in subscriptions 
+                        if sub["offer_id"].startswith(short_offer_id)), None)
+        
+        if not full_offer_id:
+            raise ValueError("Подписка не найдена")
+            
+        # Преобразуем короткий период обратно в полный
+        period_map = {
+            "1m": "MONTHLY",
+            "3m": "PERIOD_90_DAYS",
+            "6m": "PERIOD_180_DAYS",
+            "1y": "PERIOD_YEAR"
+        }
+        periodicity = period_map.get(short_period)
+        
+        # Создаем ссылку на оплату с полным offer_id
+        payment_data = create_payment_link(user_id, full_offer_id, periodicity, currency)
         logger.info(f"Получены данные для оплаты: {payment_data}")
         
         if not payment_data:
