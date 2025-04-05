@@ -929,7 +929,7 @@ def shorten_payment_url(payment_url: str) -> str:
         
         if response.status_code == 200:
             short_code = response.json()["short_code"]
-            return f"{webhook_url}/l/{short_code}"
+            return f"https://buryat-films.ru/payment/{short_code}"
         else:
             logger.error(f"Ошибка при сокращении ссылки: {response.text}")
             return payment_url
@@ -1276,7 +1276,7 @@ def check_payments_periodically():
             logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
         
         # Проверяем каждые 60 секунд
-        time.sleep(3600)
+        time.sleep(60)
 
 # Функция проверки подписок
 def check_subscriptions_periodically():
@@ -1299,7 +1299,7 @@ def check_subscriptions_periodically():
             logger.error(f"Ошибка при периодической проверке подписок: {str(e)}")
         
         # Проверяем каждые 15 минут
-        time.sleep(900)
+        time.sleep(3600)
 
 # Функция для запуска бота
 def run_bot():
