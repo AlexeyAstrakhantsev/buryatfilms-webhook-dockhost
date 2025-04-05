@@ -33,6 +33,8 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = DATA_DIR / "lava_payments.db"
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")  # Имя пользователя техподдержки в Telegram
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылка на канал
+USERNAME = os.getenv("WEBHOOK_USERNAME", "admin")
+PASSWORD = os.getenv("WEBHOOK_PASSWORD", "password")
 
 # В начале файла, где определяются другие константы
 default_message = """Добро пожаловать в канал с бурятскими мультфильмами и сериалами.
@@ -909,7 +911,34 @@ def process_payment_callback(call):
             "Произошла ошибка. Пожалуйста, попробуйте позже."
         )
 
-# Обработчик для выбора валюты оплаты (обновляем для соответствия новому формату)
+# Добавляем новую функцию для сокращения ссылки
+def shorten_payment_url(payment_url: str) -> str:
+    try:
+        # URL вашего webhook сервиса
+        webhook_url = "https://localhost:8000"  # Измените на актуальный URL
+        
+        # Данные для авторизации
+        auth = (USERNAME, PASSWORD)  # Используйте те же креды, что и в main.py
+        
+        # Отправляем запрос на сокращение
+        response = requests.post(
+            f"{webhook_url}/shorten",
+            json={"original_url": payment_url},
+            auth=auth
+        )
+        
+        if response.status_code == 200:
+            short_code = response.json()["short_code"]
+            return f"{webhook_url}/l/{short_code}"
+        else:
+            logger.error(f"Ошибка при сокращении ссылки: {response.text}")
+            return payment_url
+            
+    except Exception as e:
+        logger.error(f"Ошибка при сокращении ссылки: {str(e)}")
+        return payment_url
+
+# Модифицируем функцию process_currency_callback
 @bot.callback_query_handler(func=lambda call: call.data.startswith('c|'))
 def process_currency_callback(call):
     try:
@@ -953,11 +982,13 @@ def process_currency_callback(call):
         if not payment_url:
             raise ValueError("В ответе отсутствует ссылка на оплату")
         
-        logger.info(f"Создана ссылка на оплату: {payment_url}")
+        # Сокращаем ссылку
+        short_payment_url = shorten_payment_url(payment_url)
+        logger.info(f"Создана короткая ссылка на оплату: {short_payment_url}")
         
         # Создаем клавиатуру с кнопками
         markup = types.InlineKeyboardMarkup(row_width=1)
-        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=payment_url)
+        pay_button = types.InlineKeyboardButton('💳 Перейти к оплате', url=short_payment_url)
         back_button = types.InlineKeyboardButton('← Назад к выбору периода', callback_data='show_subscribe')
         markup.add(pay_button)
         markup.add(back_button)

@@ -10,6 +10,10 @@ import secrets
 import sqlite3
 import json
 from pydantic import BaseModel
+from fastapi.responses import RedirectResponse
+import hashlib
+import base64
+import time
 
 # Настройка логирования
 DATA_DIR = Path("/mount/database")
@@ -57,6 +61,10 @@ class WebhookPayload(BaseModel):
     cancelledAt: Optional[str] = None
     willExpireAt: Optional[str] = None
 
+# Добавляем новую модель для запроса сокращения ссылки
+class ShortenLinkRequest(BaseModel):
+    original_url: str
+
 # Инициализация базы данных
 def init_db():
     """Инициализация базы данных при запуске"""
@@ -95,6 +103,16 @@ def init_db():
             subscription_end_date TEXT,
             last_payment_id INTEGER,
             FOREIGN KEY (last_payment_id) REFERENCES payments(id)
+        )
+        ''')
+        
+        # Создаем таблицу для сокращенных ссылок
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS shortened_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            short_code TEXT UNIQUE NOT NULL,
+            original_url TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         ''')
         
@@ -185,6 +203,15 @@ def save_to_db(payload: WebhookPayload, raw_data: str):
     conn.commit()
     conn.close()
     logger.info(f"Данные сохранены в БД: {payload.eventType}, contractId: {payload.contractId}")
+
+# Функция для генерации короткого кода
+def generate_short_code(url: str) -> str:
+    # Создаем хеш из URL и текущего времени
+    hash_input = f"{url}{time.time()}"
+    hash_object = hashlib.sha256(hash_input.encode())
+    # Берем первые 8 символов base64-encoded хеша
+    short_code = base64.urlsafe_b64encode(hash_object.digest())[:8].decode()
+    return short_code
 
 # Маршруты
 @app.on_event("startup")
@@ -280,6 +307,60 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
         
     except Exception as e:
         logger.error(f"Ошибка при сбросе базы данных: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.post("/shorten")
+async def shorten_url(request: ShortenLinkRequest, username: str = Depends(verify_credentials)):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Генерируем короткий код
+        short_code = generate_short_code(request.original_url)
+        
+        # Сохраняем в базу данных
+        cursor.execute('''
+        INSERT INTO shortened_links (short_code, original_url, created_at)
+        VALUES (?, ?, ?)
+        ''', (short_code, request.original_url, datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        
+        # Возвращаем короткий код
+        return {"short_code": short_code}
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сокращении ссылки: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.get("/payment/{short_code}")
+async def redirect_to_original(short_code: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем оригинальный URL
+        cursor.execute('SELECT original_url FROM shortened_links WHERE short_code = ?', (short_code,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return RedirectResponse(url=result[0])
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ссылка не найдена"
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при перенаправлении: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
