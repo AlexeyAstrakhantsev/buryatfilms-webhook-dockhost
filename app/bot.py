@@ -915,7 +915,7 @@ def process_payment_callback(call):
 def shorten_payment_url(payment_url: str) -> str:
     try:
         # URL вашего webhook сервиса
-        webhook_url = "https://localhost:8000"  # Измените на актуальный URL
+        webhook_url = "http://localhost:8000"  # Измените на актуальный URL
         
         # Данные для авторизации
         auth = (USERNAME, PASSWORD)  # Используйте те же креды, что и в main.py
