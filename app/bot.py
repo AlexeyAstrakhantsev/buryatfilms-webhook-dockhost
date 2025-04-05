@@ -218,7 +218,7 @@ def check_subscription_status(user_id):
                p.contract_id, p.parent_contract_id
         FROM channel_members cm
         LEFT JOIN payments p ON p.id = cm.last_payment_id
-        WHERE cm.user_id = ? AND cm.status = 'active'
+        WHERE cm.user_id = ? AND (cm.status = 'active' OR cm.status = 'cancelled')
         ''', (user_id,))
         
         member = cursor.fetchone()
@@ -229,7 +229,7 @@ def check_subscription_status(user_id):
             # Проверяем, не истекла ли подписка
             if end_date and datetime.fromisoformat(end_date) > datetime.now(timezone.utc):
                 return {
-                    "status": "active",
+                    "status": status,  # Возвращаем фактический статус (active или cancelled)
                     "end_date": end_date,
                     "contract_id": parent_contract_id or contract_id
                 }
@@ -598,18 +598,18 @@ def show_main_menu(message):
         markup.add(btn_status)
         markup.add(btn_about)
         markup.add(btn_support)
-    
-    try:
-        bot.edit_message_text(
+        
+        try:
+            bot.edit_message_text(
             "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
-            chat_id=message.chat.id,
-            message_id=message.message_id,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
             reply_markup=markup,
             parse_mode="HTML"
-        )
-    except Exception as e:
-        bot.send_message(
-            message.chat.id,
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
             "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
             reply_markup=markup,
             parse_mode="HTML"
@@ -624,7 +624,16 @@ def cancel_subscription_callback(call):
         
         # Если это первый шаг (запрос подтверждения)
         if not call.data.endswith('_confirmed'):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            # Проверяем, что end_date существует и является строкой
+            end_date = subscription.get("end_date")
+            if end_date and isinstance(end_date, str):
+                try:
+                    end_date_str = datetime.fromisoformat(end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")
+                except ValueError:
+                    logger.error(f"Некорректный формат даты: {end_date}")
+                    end_date_str = "не определена"
+            else:
+                end_date_str = "не определена"
             
             markup = types.InlineKeyboardMarkup(row_width=1)
             btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
@@ -707,7 +716,7 @@ def show_about_callback(call):
         call.message.chat.id,
         about_text
     )
-
+    
     # Проверяем статус подписки
     subscription = check_subscription_status(call.from_user.id)
     
@@ -718,10 +727,10 @@ def show_about_callback(call):
     if subscription["status"] != "active":
         btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
         markup.add(btn_subscribe)
-    
+        
     btn_back = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
     markup.add(btn_back)
-
+    
     # Отправляем меню отдельным сообщением
     bot.send_message(
         call.message.chat.id,
@@ -739,17 +748,39 @@ def show_status_callback(call):
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
         
-        if subscription["status"] == "active":
+        if subscription["status"] in ["active", "cancelled"]:
             # Получаем дату окончания подписки
             end_date = subscription.get("end_date")
             end_date_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "не указана"
             
+            # Формируем сообщение в зависимости от статуса
+            if subscription["status"] == "active":
+                status_text = "✅ У вас активная подписка!"
+            else:  # cancelled
+                status_text = "ℹ️ Автопродление подписки отключено. "
+            
             # Отправляем информацию о подписке
             bot.send_message(
                 call.message.chat.id,
-                "✅ У вас активная подписка!\n\n"
-                f"Дата окончания: {end_date_str}"
+                f"{status_text}\n\n"
+                f"Доступ к каналу действует до: {end_date_str}"
             )
+            
+            # Показываем меню с кнопками управления
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+            markup.add(btn_channel)
+            
+            # Показываем кнопку отмены подписки только если статус active
+            if subscription["status"] == "active":
+                btn_cancel = types.InlineKeyboardButton('❌ Отключить автопродление', 
+                                                      callback_data=f"cancel_{subscription['contract_id']}")
+                markup.add(btn_cancel)
+            
+            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_support, btn_menu)
+            
         else:
             # Отправляем информацию об отсутствии подписки
             bot.send_message(
@@ -757,18 +788,9 @@ def show_status_callback(call):
                 "❌ У вас нет активной подписки.\n\n"
                 "Оформите подписку, чтобы получить доступ к закрытому каналу!"
             )
-        
-        # Показываем меню с кнопками управления
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
-        if subscription["status"] == "active":
-            btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
-            btn_cancel = types.InlineKeyboardButton('❌ Отменить подписку', 
-                                                  callback_data=f"cancel_{subscription['contract_id']}")
-            btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
-            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-            markup.add(btn_channel, btn_cancel, btn_support, btn_menu)
-        else:
+            
+            # Кнопки для неактивной подписки
+            markup = types.InlineKeyboardMarkup(row_width=1)
             btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
             btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
@@ -858,7 +880,7 @@ def process_payment_callback(call):
         
         # Создаем кнопки выбора валюты
         markup = types.InlineKeyboardMarkup(row_width=1)
-        
+    
         # Добавляем кнопки для каждой доступной валюты
         for currency, amount in price_info["currencies"].items():
             currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
@@ -880,6 +902,7 @@ def process_payment_callback(call):
         )
         
     except Exception as e:
+
         logger.error(f"Ошибка при обработке callback выбора периода: {str(e)}")
         bot.answer_callback_query(
             call.id,
@@ -1161,26 +1184,26 @@ def subscribe_command(message):
     # Проверяем, есть ли уже активная подписка
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-        markup.add(btn_status)
-        markup.add(btn_menu)
-        
-        try:
-            bot.edit_message_text(
-                "У вас уже есть активная подписка!",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_status)
+            markup.add(btn_menu)
+            
+            try:
+                bot.edit_message_text(
+                        "У вас уже есть активная подписка!",
+                        chat_id=message.chat.id,
+                        message_id=message.message_id,
+                    reply_markup=markup
+                )
+            except Exception as e:
+                bot.send_message(
+                    message.chat.id,
+                    "У вас уже есть активная подписка!",
                 reply_markup=markup
             )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                "У вас уже есть активная подписка!",
-                reply_markup=markup
-            )
-        return
+            return
     
     show_subscription_menu(message)
 
