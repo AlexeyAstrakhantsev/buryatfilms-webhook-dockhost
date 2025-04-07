@@ -1202,6 +1202,109 @@ def status_command(message):
             "❌ Произошла ошибка при проверке статуса подписки. Попробуйте позже.",
             reply_markup=markup
         )
+# Добавляем новый обработчик для команды рассылки
+@bot.message_handler(commands=['broadcast'])
+def broadcast_command(message):
+    try:
+        user_id = str(message.from_user.id)
+        
+        # Проверяем, является ли пользователь администратором
+        if user_id != str(ADMIN_ID):
+            bot.reply_to(message, "❌ У вас нет прав для использования этой команды.")
+            return
+        
+        # Проверяем наличие текста для рассылки
+        command_parts = message.text.split(maxsplit=1)
+        if len(command_parts) < 2:
+            bot.reply_to(
+                message,
+                "ℹ️ Использование команды:\n"
+                "/broadcast <текст сообщения>\n\n"
+                "Поддерживается HTML-разметка."
+            )
+            return
+        
+        broadcast_text = command_parts[1]
+        
+        # Получаем список всех пользователей из базы данных
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем уникальных пользователей из таблицы channel_members
+        cursor.execute('SELECT DISTINCT user_id FROM channel_members')
+        users = cursor.fetchall()
+        
+        # Добавляем пользователей из таблицы payments, которых нет в channel_members
+        cursor.execute('''
+        SELECT DISTINCT SUBSTR(buyer_email, 1, INSTR(buyer_email, '@') - 1) 
+        FROM payments 
+        WHERE buyer_email NOT IN (
+            SELECT user_id || '@t.me' 
+            FROM channel_members
+        )
+        ''')
+        additional_users = cursor.fetchall()
+        
+        conn.close()
+        
+        # Объединяем списки пользователей
+        all_users = list(set([user[0] for user in users + additional_users]))
+        
+        # Отправляем статус о начале рассылки
+        status_message = bot.reply_to(
+            message,
+            f"📤 Начинаю рассылку...\n"
+            f"Всего получателей: {len(all_users)}"
+        )
+        
+        # Счетчики для статистики
+        successful = 0
+        failed = 0
+        
+        # Выполняем рассылку
+        for user_id in all_users:
+            try:
+                bot.send_message(
+                    user_id,
+                    broadcast_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                successful += 1
+                
+                # Обновляем статус каждые 10 отправленных сообщений
+                if (successful + failed) % 10 == 0:
+                    bot.edit_message_text(
+                        f"📤 Отправка сообщений...\n"
+                        f"Успешно: {successful}\n"
+                        f"Ошибок: {failed}\n"
+                        f"Всего: {len(all_users)}",
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id
+                    )
+                
+                # Задержка между отправками, чтобы избежать ограничений Telegram
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения пользователю {user_id}: {str(e)}")
+                failed += 1
+        
+        # Отправляем итоговый отчет
+        bot.edit_message_text(
+            f"✅ Рассылка завершена\n\n"
+            f"📊 Статистика:\n"
+            f"Успешно доставлено: {successful}\n"
+            f"Ошибок доставки: {failed}\n"
+            f"Всего получателей: {len(all_users)}",
+            chat_id=status_message.chat.id,
+            message_id=status_message.message_id
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении рассылки: {str(e)}")
+        bot.reply_to(message, "❌ Произошла ошибка при выполнении рассылки.")
+
 
 # Обработчик для команды /subscribe
 @bot.message_handler(commands=['subscribe'])
@@ -1276,7 +1379,7 @@ def check_payments_periodically():
             logger.error(f"Ошибка при проверке новых платежей: {str(e)}")
         
         # Проверяем каждые 60 секунд
-        time.sleep(60)
+        time.sleep(20)
 
 # Функция проверки подписок
 def check_subscriptions_periodically():

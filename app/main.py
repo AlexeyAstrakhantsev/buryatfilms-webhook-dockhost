@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse
 import hashlib
 import base64
 import time
+import requests
 
 # Настройка логирования
 DATA_DIR = Path("/mount/database")
@@ -213,6 +214,21 @@ def generate_short_code(url: str) -> str:
     short_code = base64.urlsafe_b64encode(hash_object.digest())[:8].decode()
     return short_code
 
+# В main.py добавим функцию для прямой отправки уведомлений в бот
+def notify_bot(user_id: str, message: str, markup=None):
+    try:
+        from bot import bot  # Импортируем экземпляр бота
+        
+        if markup:
+            bot.send_message(user_id, message, reply_markup=markup)
+        else:
+            bot.send_message(user_id, message)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления в бот: {str(e)}")
+        return False
+
 # Маршруты
 @app.on_event("startup")
 async def startup_event():
@@ -239,20 +255,27 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Сохраняем в БД
         save_to_db(payload, raw_data)
         
-        # Обрабатываем различные типы событий
+        # Сразу после получения вебхука отправляем уведомление
         if payload.eventType == "payment.success":
-            logger.info(f"Успешная оплата подписки: {payload.contractId}")
+            user_id = payload.buyer.email.split('@')[0]
+            notify_bot(
+                user_id,
+                f"!✅ Поздравляем! Ваша подписка '{payload.product.title}' успешно оплачена.\n"
+                f"Сумма: {payload.amount} {payload.currency}"
+            )
+            
         elif payload.eventType == "payment.failed":
-            logger.warning(f"Ошибка при оформлении подписки: {payload.contractId}, причина: {payload.errorMessage}")
-        elif payload.eventType == "subscription.recurring.payment.success":
-            logger.info(f"Успешное продление подписки: {payload.contractId}, родительский контракт: {payload.parentContractId}")
-        elif payload.eventType == "subscription.recurring.payment.failed":
-            logger.warning(f"Ошибка при продлении подписки: {payload.contractId}, причина: {payload.errorMessage}")
+            user_id = payload.buyer.email.split('@')[0]
+            notify_bot(
+                user_id,
+                f"!❌ К сожалению, оплата подписки '{payload.product.title}' не удалась.\n"
+                f"Причина: {payload.errorMessage}\n\n"
+            )
         
         return {"status": "success", "message": "Webhook processed successfully"}
     
     except Exception as e:
-        logger.error(f"Ошибка при обработке веб-хука: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка при обработке веб-хука: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 @app.post("/admin/reset_db")
