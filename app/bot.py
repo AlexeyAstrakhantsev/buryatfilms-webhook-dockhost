@@ -327,11 +327,14 @@ def add_user_to_channel(user_id):
         conn.close()
         
         # Отправляем пользователю ссылку на канал
-        bot.send_message(
+        welcome_message = bot.send_message(
             user_id,
             f"Поздравляем! Вы успешно оформили подписку. Вот ваша ссылка для доступа к закрытому каналу: {invite_link.invite_link}",
             disable_web_page_preview=False
         )
+        
+        # Показываем главное меню
+        show_main_menu(welcome_message)
         
         logger.info(f"Пользователь {user_id} добавлен в закрытый канал")
         return True
