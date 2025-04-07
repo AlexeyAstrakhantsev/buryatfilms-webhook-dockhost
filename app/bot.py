@@ -325,14 +325,23 @@ def add_user_to_channel(user_id):
             conn.commit()
         
         conn.close()
+
+        # Отправляем сообщение с кнопкой для входа в канал
+        channel_markup = types.InlineKeyboardMarkup(row_width=1)
+        channel_button = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
+        channel_markup.add(channel_button)
         
+        bot.send_message(
+            user_id,
+            f"Поздравляем! Вы успешно оформили подписку. Вот ваша ссылка для доступа к закрытому каналу: {invite_link.invite_link}",
+            reply_markup=channel_markup
+        )        
         # Отправляем пользователю ссылку на канал
         welcome_message = bot.send_message(
             user_id,
-            f"Поздравляем! Вы успешно оформили подписку. Вот ваша ссылка для доступа к закрытому каналу: {invite_link.invite_link}",
+            f"⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
             disable_web_page_preview=False
-        )
-        
+        )        
         # Показываем главное меню
         show_main_menu(welcome_message)
         
@@ -587,8 +596,8 @@ def show_main_menu(message):
     btn_about = types.InlineKeyboardButton('🔍 Подробнее о канале', callback_data='show_about')
     btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
     
-    if subscription["status"] == "active":
-        # Кнопки для активной подписки
+    if subscription["status"] in ["active", "cancelled"]:
+        # Кнопки для активной или отмененной подписки
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
         btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
         markup.add(btn_status)
@@ -606,7 +615,7 @@ def show_main_menu(message):
         
     try:
         bot.edit_message_text(
-        "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
             chat_id=message.chat.id,
             message_id=message.message_id,
         reply_markup=markup,
@@ -615,7 +624,7 @@ def show_main_menu(message):
     except Exception as e:
         bot.send_message(
             message.chat.id,
-        "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -739,7 +748,7 @@ def show_about_callback(call):
     # Отправляем меню отдельным сообщением
     bot.send_message(
         call.message.chat.id,
-        "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
         reply_markup=markup
     )
 
@@ -804,7 +813,7 @@ def show_status_callback(call):
         # Отправляем меню отдельным сообщением
         bot.send_message(
             call.message.chat.id,
-            "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀",
+            "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
             reply_markup=markup
         )
             
