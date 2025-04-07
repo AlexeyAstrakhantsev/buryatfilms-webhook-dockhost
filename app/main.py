@@ -1,10 +1,11 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Union
+import asyncio
 
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 import sqlite3
@@ -214,6 +215,53 @@ def generate_short_code(url: str) -> str:
     short_code = base64.urlsafe_b64encode(hash_object.digest())[:8].decode()
     return short_code
 
+# Функция для очистки старых сокращенных ссылок
+def cleanup_old_shortened_links(days_to_keep=7, force=False):
+    """
+    Удаляет сокращенные ссылки старше указанного количества дней.
+    Параметр force=True игнорирует проверку количества и всегда выполняет очистку.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Получаем общее количество ссылок
+        cursor.execute('SELECT COUNT(*) FROM shortened_links')
+        total_links = cursor.fetchone()[0]
+        
+        # Очищаем только если количество ссылок превышает порог или установлен force=True
+        if total_links > 1000 or force:
+            # Рассчитываем дату, старше которой ссылки будут удалены
+            cutoff_date = (datetime.now() - timedelta(days=days_to_keep)).isoformat()
+            
+            # Получаем количество ссылок до очистки
+            cursor.execute('SELECT COUNT(*) FROM shortened_links')
+            count_before = cursor.fetchone()[0]
+            
+            # Удаляем старые ссылки
+            cursor.execute('DELETE FROM shortened_links WHERE created_at < ?', (cutoff_date,))
+            
+            # Получаем количество ссылок после очистки
+            cursor.execute('SELECT COUNT(*) FROM shortened_links')
+            count_after = cursor.fetchone()[0]
+            
+            deleted_count = count_before - count_after
+            
+            conn.commit()
+            conn.close()
+            
+            if deleted_count > 0:
+                logger.info(f"Очищено {deleted_count} устаревших сокращенных ссылок")
+            
+            return deleted_count
+        else:
+            conn.close()
+            return 0
+    
+    except Exception as e:
+        logger.error(f"Ошибка при очистке старых сокращенных ссылок: {str(e)}")
+        return 0
+
 # В main.py добавим функцию для прямой отправки уведомлений в бот
 def notify_bot(user_id: str, message: str, markup=None):
     try:
@@ -229,10 +277,53 @@ def notify_bot(user_id: str, message: str, markup=None):
         logger.error(f"Ошибка при отправке уведомления в бот: {str(e)}")
         return False
 
+# Фоновая задача для периодической очистки ссылок
+async def periodic_cleanup_task():
+    while True:
+        try:
+            # Проверяем количество ссылок
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM shortened_links')
+            total_links = cursor.fetchone()[0]
+            conn.close()
+            
+            # Определяем интервал проверки в зависимости от размера базы
+            if total_links > 5000:
+                # Много ссылок - короткий интервал (каждые 3 часа)
+                cleanup_interval = 10800
+                cleanup_count = cleanup_old_shortened_links(days_to_keep=3)
+            elif total_links > 1000:
+                # Средний размер базы - средний интервал (каждые 12 часов)
+                cleanup_interval = 43200
+                cleanup_count = cleanup_old_shortened_links(days_to_keep=5)
+            else:
+                # Малый размер базы - длинный интервал (раз в день)
+                cleanup_interval = 86400
+                cleanup_count = cleanup_old_shortened_links(days_to_keep=7, force=False)
+            
+            if cleanup_count > 0:
+                logger.info(f"Плановая очистка завершена, удалено {cleanup_count} ссылок. Следующая через {cleanup_interval // 3600} ч.")
+            
+            # Ждем до следующей проверки
+            await asyncio.sleep(cleanup_interval)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой задаче очистки ссылок: {str(e)}")
+            # Ждем 1 час перед повторной попыткой в случае ошибки
+            await asyncio.sleep(3600)
+
+# Запуск фоновой задачи
+@app.on_event("startup")
+async def start_cleanup_task():
+    asyncio.create_task(periodic_cleanup_task())
+
 # Маршруты
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    # Первоначальная очистка старых ссылок при запуске сервера
+    cleanup_old_shortened_links(days_to_keep=30, force=True)  # При первом запуске выполняем принудительную очистку
     logger.info("Сервер запущен")
 
 @app.get("/")
@@ -379,6 +470,9 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
 @app.post("/shorten")
 async def shorten_url(request: ShortenLinkRequest, username: str = Depends(verify_credentials)):
     try:
+        # Убираем запуск очистки при каждом запросе
+        # cleanup_old_shortened_links()
+        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
