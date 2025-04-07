@@ -255,21 +255,62 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Сохраняем в БД
         save_to_db(payload, raw_data)
         
-        # Сразу после получения вебхука отправляем уведомление
+        # Получаем user_id из email
+        user_id = payload.buyer.email.split('@')[0]
+        
+        # Импортируем функции из bot.py
+        from bot import add_user_to_channel, notify_admin, bot
+        
+        # Обрабатываем успешный платеж
         if payload.eventType == "payment.success":
-            user_id = payload.buyer.email.split('@')[0]
-            notify_bot(
+            # Отправляем уведомление пользователю
+            bot.send_message(
                 user_id,
-                f"!✅ Поздравляем! Ваша подписка '{payload.product.title}' успешно оплачена.\n"
+                f"✅ Поздравляем! Ваша подписка '{payload.product.title}' успешно оплачена.\n"
                 f"Сумма: {payload.amount} {payload.currency}"
             )
             
+            # Добавляем пользователя в канал
+            if add_user_to_channel(user_id):
+                logger.info(f"Пользователь {user_id} успешно добавлен в канал")
+                
+                # Уведомляем администратора
+                notify_admin(
+                    f"🎉 <b>Новая подписка</b>\n\n"
+                    f"<b>Пользователь:</b> {user_id}\n"
+                    f"<b>Подписка:</b> {payload.product.title}\n"
+                    f"<b>Сумма:</b> {payload.amount} {payload.currency}"
+                )
+            else:
+                logger.error(f"Не удалось добавить пользователя {user_id} в канал")
+                
+        # Обрабатываем неудачный платеж
         elif payload.eventType == "payment.failed":
-            user_id = payload.buyer.email.split('@')[0]
-            notify_bot(
+            bot.send_message(
                 user_id,
-                f"!❌ К сожалению, оплата подписки '{payload.product.title}' не удалась.\n"
+                f"❌ К сожалению, оплата подписки '{payload.product.title}' не удалась.\n"
                 f"Причина: {payload.errorMessage}\n\n"
+                f"Вы можете попробовать снова, используя команду /subscribe"
+            )
+            
+            # Показываем основное меню
+            from bot import types, SUPPORT_USERNAME, show_main_menu
+            
+            # Сначала создаем сообщение, чтобы затем на него повесить меню
+            menu_message = bot.send_message(
+                user_id,
+                "⠀⠀⠀⠀⠀Выберите пункт меню⠀⠀⠀⠀⠀"
+            )
+            
+            # Показываем главное меню пользователю после неудачной оплаты
+            show_main_menu(menu_message)
+            
+            # Уведомляем администратора о неудачном платеже
+            notify_admin(
+                f"❌ <b>Неудачный платеж</b>\n\n"
+                f"<b>Пользователь:</b> {user_id}\n"
+                f"<b>Подписка:</b> {payload.product.title}\n"
+                f"<b>Причина:</b> {payload.errorMessage}"
             )
         
         return {"status": "success", "message": "Webhook processed successfully"}

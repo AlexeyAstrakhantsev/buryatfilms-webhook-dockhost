@@ -1371,7 +1371,9 @@ def check_payments_periodically():
             conn.close()
             
             if table_exists:
-                check_new_payments()
+                # check_new_payments()
+                pass
+            
             else:
                 logger.warning("Таблица payments еще не создана. Пропускаем проверку платежей.")
                 
