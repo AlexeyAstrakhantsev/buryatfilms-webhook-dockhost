@@ -1325,10 +1325,18 @@ def run_bot():
         subscription_thread.daemon = True
         subscription_thread.start()
         
-        # Запускаем бота
-        bot.polling(none_stop=True, interval=0)
+        # Запускаем бота с увеличенными таймаутами
+        # interval=3: увеличиваем интервал между запросами
+        # timeout=30: увеличиваем таймаут соединения
+        bot.polling(none_stop=True, interval=3, timeout=30)
+    except requests.exceptions.ReadTimeout as e:
+        logger.warning(f"Таймаут при обращении к Telegram API: {str(e)}. Перезапуск бота...")
+        time.sleep(5)  # Ожидаем 5 секунд перед повторным запуском
+        run_bot()  # Рекурсивно запускаем бота снова
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {str(e)}", exc_info=True)
+        time.sleep(10)  # Ожидаем 10 секунд перед повторным запуском
+        run_bot()  # Рекурсивно запускаем бота снова
 
 # Запуск бота в отдельном потоке
 if __name__ == "__main__":
