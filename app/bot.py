@@ -1009,13 +1009,13 @@ def check_subscription_expiration():
                     # Если подписка истекла, но еще действует льготный период
                     elif days_left < 0:
                         days_grace_left = GRACE_PERIOD_DAYS + days_left
-                        bot.send_message(
-                            user_id,
-                            f"⚠️ Ваша подписка истекла!\n\n"
-                            f"У вас есть еще {days_grace_left} дней льготного периода.\n"
-                            f"После этого доступ к каналу будет прекращен.\n\n"
-                            f"Для продления подписки используйте команду /subscribe"
-                        )
+                        #bot.send_message(
+                        #    user_id,
+                        #    f"⚠️ Ваша подписка истекла!\n\n"
+                        #    f"У вас есть еще {days_grace_left} дней льготного периода.\n"
+                        #    f"После этого доступ к каналу будет прекращен.\n\n"
+                        #    f"Для продления подписки используйте команду /subscribe"
+                        #)
                     
                     # Уведомления о скором окончании подписки
                     #elif days_left in NOTIFY_BEFORE_DAYS:
