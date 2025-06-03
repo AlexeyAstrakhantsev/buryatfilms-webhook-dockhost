@@ -36,6 +36,46 @@ CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")  # Постоянная ссылк�
 USERNAME = os.getenv("WEBHOOK_USERNAME", "admin")
 PASSWORD = os.getenv("WEBHOOK_PASSWORD", "password")
 
+# Цены из переменных окружения
+PRICE_MONTHLY = float(os.getenv("PRICE_MONTHLY", "500"))
+PRICE_3_MONTHS = float(os.getenv("PRICE_3_MONTHS", "1200"))
+PRICE_6_MONTHS = float(os.getenv("PRICE_6_MONTHS", "2000"))
+PRICE_YEARLY = float(os.getenv("PRICE_YEARLY", "3850"))
+
+# Словарь соответствия цен и периодичности
+PRICE_PERIODICITY = {
+    PRICE_MONTHLY: "MONTHLY",
+    PRICE_3_MONTHS: "PERIOD_90_DAYS", 
+    PRICE_6_MONTHS: "PERIOD_180_DAYS",
+    PRICE_YEARLY: "PERIOD_YEAR"
+}
+
+# Словарь дней для каждого периода
+PERIOD_DAYS = {
+    "MONTHLY": 30,
+    "PERIOD_90_DAYS": 90,
+    "PERIOD_180_DAYS": 180,
+    "PERIOD_YEAR": 365
+}
+
+# Функция для определения периодичности по стоимости
+
+def get_periodicity_by_amount(amount: float) -> str:
+    """
+    Определяет периодичность подписки по стоимости
+    """
+    # Ищем точное совпадение цены
+    if amount in PRICE_PERIODICITY:
+        return PRICE_PERIODICITY[amount]
+    # Если точного совпадения нет, ищем ближайшую цену
+    closest_price = min(PRICE_PERIODICITY.keys(), key=lambda x: abs(x - amount))
+    price_difference = abs(closest_price - amount)
+    if price_difference <= closest_price * 0.1:
+        logger.info(f"Цена {amount} близка к {closest_price}, используем периодичность {PRICE_PERIODICITY[closest_price]}")
+        return PRICE_PERIODICITY[closest_price]
+    logger.warning(f"Не удалось определить периодичность для цены {amount}, используем MONTHLY")
+    return "MONTHLY"
+
 # В начале файла, где определяются другие константы
 default_message = """Добро пожаловать в канал с бурятскими мультфильмами и сериалами.
 """
@@ -281,39 +321,30 @@ def add_user_to_channel(user_id):
             member_limit=1,
             expire_date=int(time.time()) + 86400
         )
-        
         # Получаем информацию о последнем платеже
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
-        SELECT id, timestamp, raw_data
+        SELECT id, timestamp, raw_data, amount
         FROM payments 
         WHERE buyer_email = ? 
         AND (status = 'subscription-active' OR status = 'active')
         ORDER BY timestamp DESC
         LIMIT 1
         ''', (f"{user_id}@t.me",))
-        
         payment = cursor.fetchone()
         if payment:
-            payment_id, timestamp, raw_data = payment
-            
-            # Определяем дату окончания подписки
+            payment_id, timestamp, raw_data, amount = payment
+            # Определяем периодичность по стоимости
+            periodicity = get_periodicity_by_amount(amount)
+            days = PERIOD_DAYS.get(periodicity, 30)
             try:
-                raw_data = json.loads(raw_data)
-                periodicity = raw_data.get('periodicity', 'MONTHLY')
-                days = {
-                    "MONTHLY": 30,
-                    "PERIOD_90_DAYS": 90,
-                    "PERIOD_180_DAYS": 180,
-                    "PERIOD_YEAR": 365
-                }.get(periodicity, 30)
-                
                 end_date = (datetime.fromisoformat(timestamp.replace('Z', '+00:00')) + 
                            timedelta(days=days)).isoformat()
-            except:
-                end_date = None
-            
+                logger.info(f"Пользователь {user_id}: стоимость {amount}, периодичность {periodicity}, дней {days}, окончание {end_date}")
+            except Exception as e:
+                logger.error(f"Ошибка при расчете даты окончания подписки: {str(e)}")
+                end_date = (datetime.fromisoformat(timestamp.replace('Z', '+00:00')) + timedelta(days=30)).isoformat()
             # Добавляем или обновляем запись в channel_members с текущей датой
             current_time = datetime.now(timezone.utc).isoformat()
             cursor.execute('''
@@ -321,16 +352,12 @@ def add_user_to_channel(user_id):
             (user_id, status, joined_at, subscription_end_date, last_payment_id)
             VALUES (?, 'active', ?, ?, ?)
             ''', (user_id, current_time, end_date, payment_id))
-            
             conn.commit()
-        
         conn.close()
-
         # Отправляем сообщение с кнопкой для входа в канал
         channel_markup = types.InlineKeyboardMarkup(row_width=1)
         channel_button = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
         channel_markup.add(channel_button)
-        
         bot.send_message(
             user_id,
             f"Поздравляем! Вы успешно оформили подписку. Вот ваша ссылка для доступа к закрытому каналу: {invite_link.invite_link}",
@@ -344,10 +371,8 @@ def add_user_to_channel(user_id):
         )        
         # Показываем главное меню
         show_main_menu(welcome_message)
-        
         logger.info(f"Пользователь {user_id} добавлен в закрытый канал")
         return True
-        
     except Exception as e:
         logger.error(f"Ошибка при добавлении пользователя {user_id} в канал: {str(e)}")
         return False
@@ -599,10 +624,6 @@ def show_about_callback(call):
     about_text = """В ЗАКРЫТОМ КАНАЛЕ:
 
 ✅ Хиты на бурятском — «Шрек», «Кунг-фу Панда» и другие любимые мультфильмы. Мы постоянно пополняем коллекцию.
-
-✅ Новые серии анимэ каждую неделю — только для подписчиков.
-
-🎁 Розыгрыши призов каждый месяц — благодарим тех, кто поддерживает проект.
 
 ✅ Вы — наш генеральный партнёр. Ваша подписка помогает создавать новые мультфильмы и фильмы на бурятском языке.
 
