@@ -356,7 +356,7 @@ def add_user_to_channel(user_id):
         conn.close()
         # Отправляем сообщение с кнопкой для входа в канал
         channel_markup = types.InlineKeyboardMarkup(row_width=1)
-        channel_button = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
+        channel_button = types.InlineKeyboardButton('📺 Войти в канал', url=invite_link.invite_link)
         channel_markup.add(channel_button)
         bot.send_message(
             user_id,
