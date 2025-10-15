@@ -274,11 +274,11 @@ def check_subscription_status(user_id):
                 try:
                     end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
                     if end_date > datetime.now(timezone.utc):
-                return {
+                        return {
                             "status": status,  # Возвращаем фактический статус (active или cancelled)
                             "end_date": end_date_str,
-                    "contract_id": parent_contract_id or contract_id
-                }
+                            "contract_id": parent_contract_id or contract_id
+                        }
                 except ValueError as ve:
                     logger.error(f"Ошибка формата даты в check_subscription_status (member): {end_date_str} - {ve}")
                 except Exception as e:
