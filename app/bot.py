@@ -831,11 +831,11 @@ def show_status_callback(call):
             markup.add(btn_subscribe, btn_support, btn_menu)
         
         # Отправляем меню отдельным сообщением
-            bot.send_message(
-                call.message.chat.id,
-            "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-                reply_markup=markup
-            )
+        bot.send_message(
+            call.message.chat.id,
+        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
+            reply_markup=markup
+        )
             
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
