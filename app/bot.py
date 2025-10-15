@@ -572,23 +572,63 @@ def show_main_menu(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
     try:
-        contract_id = call.data.split('_')[1]
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
-        
+
+        # Обрабатываем ошибку от check_subscription_status явно
+        if subscription.get("status") == "error":
+            bot.answer_callback_query(
+                call.id,
+                f"❌ Произошла ошибка при проверке статуса подписки: {subscription.get('error', 'Неизвестная ошибка')}. Попробуйте позже."
+            )
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ Произошла ошибка при проверке статуса подписки: {subscription.get('error', 'Неизвестная ошибка')}. "
+                f"Пожалуйста, попробуйте позже или обратитесь в поддержку."
+            )
+            logger.error(f"Ошибка check_subscription_status при обработке отмены для user {user_id}: {subscription.get('error')}")
+            return
+
+        # Получаем contract_id из callback_data
+        try:
+            contract_id = call.data.split('_')[1]
+        except IndexError:
+            logger.error(f"Некорректный формат callback_data для отмены подписки: {call.data} для user {user_id}")
+            bot.answer_callback_query(
+                call.id,
+                "❌ Некорректные данные для отмены подписки. Пожалуйста, обратитесь в поддержку."
+            )
+            bot.send_message(
+                call.message.chat.id,
+                "❌ Произошла ошибка при отмене подписки. Не удалось распознать данные. Пожалуйста, обратитесь в поддержку."
+            )
+            return
+
         # Если это первый шаг (запрос подтверждения)
         if not call.data.endswith('_confirmed'):
-            # Проверяем, что end_date существует и является строкой
             end_date = subscription.get("end_date")
+            end_date_str = "не определена"
             if end_date and isinstance(end_date, str):
                 try:
                     end_date_str = datetime.fromisoformat(end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")
                 except ValueError:
                     logger.error(f"Некорректный формат даты: {end_date}")
                     end_date_str = "не определена"
-            else:
-                end_date_str = "не определена"
             
+            # Проверяем наличие contract_id перед формированием кнопки подтверждения
+            if not subscription.get("contract_id"):
+                logger.error(f"Не найден contract_id для отмены подписки пользователя {user_id} при запросе подтверждения.")
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Не удалось найти данные для отмены подписки. Пожалуйста, обратитесь в поддержку."
+                )
+                bot.send_message(
+                    call.message.chat.id,
+                    "❌ Не удалось найти данные для отмены подписки. "
+                    "Пожалуйста, попробуйте позже или обратитесь в поддержку."
+                )
+                return
+
             markup = types.InlineKeyboardMarkup(row_width=1)
             btn_confirm = types.InlineKeyboardButton('✅ Да, отписаться', 
                                                    callback_data=f"cancel_{contract_id}_confirmed")
@@ -610,8 +650,25 @@ def cancel_subscription_callback(call):
             return
         
         # Если это подтверждение отмены
+        # Дополнительная проверка contract_id перед вызовом cancel_subscription
+        if not contract_id: # contract_id уже извлечен выше, но стоит убедиться, что он не пуст
+             logger.error(f"Пустой contract_id при подтвержденной отмене для user {user_id}.")
+             bot.answer_callback_query(
+                 call.id,
+                 "❌ Не удалось отменить подписку: отсутствуют данные контракта."
+             )
+             bot.send_message(
+                 call.message.chat.id,
+                 "❌ Произошла ошибка при отмене подписки: отсутствуют данные контракта. Пожалуйста, обратитесь в поддержку."
+             )
+             return
+
         if cancel_subscription(user_id, contract_id):
-            end_date_str = datetime.fromisoformat(subscription["end_date"]).strftime("%d.%m.%Y")
+            if subscription.get("end_date"):
+                end_date_str = datetime.fromisoformat(subscription["end_date"].replace('Z', '+00:00')).strftime("%d.%m.%Y")
+            else:
+                end_date_str = "не определена"
+                logger.warning(f"end_date не найдена в subscription после успешной отмены для user {user_id}")
             
             # Удаляем предыдущее сообщение с меню
             bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -639,7 +696,7 @@ def cancel_subscription_callback(call):
                 "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
             )
     except Exception as e:
-        logger.error(f"Ошибка при обработке отмены подписки: {str(e)}")
+        logger.error(f"Неожиданная ошибка при обработке отмены подписки для пользователя {user_id}: {str(e)}", exc_info=True)
         bot.answer_callback_query(
             call.id,
             "❌ Произошла ошибка при отмене подписки"
