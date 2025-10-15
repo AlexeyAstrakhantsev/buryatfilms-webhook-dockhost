@@ -427,12 +427,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             )
             
             # Уведомляем администратора
+            formatted_end_date = datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime('%d.%m.%Y')
             notify_admin(
                 f"🔄 <b>Автопродление подписки</b>\n\n"
                 f"<b>Пользователь:</b> {user_id}\n"
                 f"<b>Подписка:</b> {payload.product.title}\n"
                 f"<b>Сумма:</b> {payload.amount} {payload.currency}\n"
-                f"<b>Новая дата окончания:</b> {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")}"
+                f"<b>Новая дата окончания:</b> {formatted_end_date}"
             )
             logger.info(f"Подписка пользователя {user_id} успешно продлена до {new_end_date}")
 
