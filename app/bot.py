@@ -1350,22 +1350,22 @@ def subscribe_command(message):
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
         markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
-            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
-            markup.add(btn_status)
-            markup.add(btn_menu)
-            
-            try:
-        bot.edit_message_text(
-                        "У вас уже есть активная подписка!",
-                        chat_id=message.chat.id,
-                        message_id=message.message_id,
-            reply_markup=markup
-        )
-    except Exception as e:
-                bot.send_message(
-                    message.chat.id,
-                    "У вас уже есть активная подписка!",
+        btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
+        btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+        markup.add(btn_status)
+        markup.add(btn_menu)
+        
+        try:
+            bot.edit_message_text(
+                "У вас уже есть активная подписка!",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
+                "У вас уже есть активная подписка!",
                 reply_markup=markup
             )
         return
