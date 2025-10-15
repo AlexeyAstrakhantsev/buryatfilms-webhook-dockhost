@@ -962,13 +962,12 @@ def shorten_payment_url(payment_url: str) -> str:
         if response.status_code == 200:
             short_code = response.json()["short_code"]
             return f"https://buryat-films.ru/payment/{short_code}"
-    else:
+        else:
             logger.error(f"Ошибка при сокращении ссылки: {response.text}")
             return payment_url
             
     except Exception as e:
         logger.error(f"Ошибка при сокращении ссылки: {str(e)}")
-        return payment_url
 
 # Модифицируем функцию process_currency_callback
 @bot.callback_query_handler(func=lambda call: call.data.startswith('c|'))
