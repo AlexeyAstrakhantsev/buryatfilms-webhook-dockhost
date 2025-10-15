@@ -274,16 +274,16 @@ def check_subscription_status(user_id):
                 try:
                     end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
                     if end_date > datetime.now(timezone.utc):
-                        return {
+                return {
                             "status": status,  # Возвращаем фактический статус (active или cancelled)
                             "end_date": end_date_str,
-                            "contract_id": parent_contract_id or contract_id
-                        }
+                    "contract_id": parent_contract_id or contract_id
+                }
                 except ValueError as ve:
                     logger.error(f"Ошибка формата даты в check_subscription_status (member): {end_date_str} - {ve}")
                 except Exception as e:
                     logger.error(f"Неожиданная ошибка при парсинге даты в check_subscription_status (member): {end_date_str} - {e}")
-            
+        
         # Если нет активной записи в channel_members или она истекла, проверяем последний платеж
         cursor.execute('''
         SELECT p.status, p.timestamp, p.event_type, cm.subscription_end_date,
@@ -399,7 +399,7 @@ def add_user_to_channel(user_id):
             user_id,
             f"⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
             disable_web_page_preview=False
-        )        
+        )
         # Показываем главное меню
         show_main_menu(welcome_message)
         logger.info(f"Пользователь {user_id} добавлен в закрытый канал")
@@ -553,17 +553,17 @@ def show_main_menu(message):
         markup.add(btn_about)
         markup.add(btn_support)
         
-    try:
-        bot.edit_message_text(
+        try:
+            bot.edit_message_text(
         "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-            chat_id=message.chat.id,
-            message_id=message.message_id,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
         reply_markup=markup,
         parse_mode="HTML"
-        )
-    except Exception as e:
-        bot.send_message(
-            message.chat.id,
+            )
+        except Exception as e:
+            bot.send_message(
+                message.chat.id,
         "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
         reply_markup=markup,
         parse_mode="HTML"
@@ -636,8 +636,11 @@ def cancel_subscription_callback(call):
                                                 callback_data='show_status')
             markup.add(btn_confirm, btn_back)
             
-            # Удаляем предыдущее сообщение с меню
-            bot.delete_message(call.message.chat.id, call.message.message_id)
+            try:
+                # Удаляем предыдущее сообщение с меню
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except telebot.api_helper.ApiTelegramException as e:
+                logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
             
             # Отправляем запрос подтверждения
             bot.send_message(
@@ -647,8 +650,8 @@ def cancel_subscription_callback(call):
                 f"Автопродление будет отключено.",
                 reply_markup=markup
             )
-            return
-        
+        return
+    
         # Если это подтверждение отмены
         # Дополнительная проверка contract_id перед вызовом cancel_subscription
         if not contract_id: # contract_id уже извлечен выше, но стоит убедиться, что он не пуст
@@ -670,8 +673,11 @@ def cancel_subscription_callback(call):
                 end_date_str = "не определена"
                 logger.warning(f"end_date не найдена в subscription после успешной отмены для user {user_id}")
             
-            # Удаляем предыдущее сообщение с меню
-            bot.delete_message(call.message.chat.id, call.message.message_id)
+            try:
+                # Удаляем предыдущее сообщение с меню
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except telebot.api_helper.ApiTelegramException as e:
+                logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id} после отмены: {e}")
             
             # Отправляем сообщение об успешной отмене
             bot.send_message(
@@ -706,8 +712,11 @@ def cancel_subscription_callback(call):
 # Обработчик для кнопки "Подробнее о канале"
 @bot.callback_query_handler(func=lambda call: call.data == 'show_about')
 def show_about_callback(call):
-    # Удаляем предыдущее сообщение с меню
-    bot.delete_message(call.message.chat.id, call.message.message_id)
+    try:
+        # Удаляем предыдущее сообщение с меню
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except telebot.api_helper.ApiTelegramException as e:
+        logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
     
     about_text = """В ЗАКРЫТОМ КАНАЛЕ:
 
@@ -749,8 +758,11 @@ def show_about_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_status')
 def show_status_callback(call):
     try:
-        # Удаляем предыдущее сообщение с меню
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        try:
+            # Удаляем предыдущее сообщение с меню
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except telebot.api_helper.ApiTelegramException as e:
+            logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
         
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
@@ -796,7 +808,7 @@ def show_status_callback(call):
             # Показываем кнопку отмены подписки только если статус active
             if subscription["status"] == "active":
                 btn_cancel = types.InlineKeyboardButton('❌ Отключить автопродление', 
-                                                      callback_data=f"cancel_{subscription['contract_id']}")
+                                                  callback_data=f"cancel_{subscription['contract_id']}")
                 markup.add(btn_cancel)
             
             btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
@@ -819,11 +831,11 @@ def show_status_callback(call):
             markup.add(btn_subscribe, btn_support, btn_menu)
         
         # Отправляем меню отдельным сообщением
-        bot.send_message(
-            call.message.chat.id,
+            bot.send_message(
+                call.message.chat.id,
             "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-            reply_markup=markup
-        )
+                reply_markup=markup
+            )
             
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
@@ -901,7 +913,7 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-        markup = types.InlineKeyboardMarkup(row_width=1)
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
         # Добавляем кнопки для каждой доступной валюты
         for currency, amount in price_info["currencies"].items():
@@ -950,7 +962,7 @@ def shorten_payment_url(payment_url: str) -> str:
         if response.status_code == 200:
             short_code = response.json()["short_code"]
             return f"https://buryat-films.ru/payment/{short_code}"
-        else:
+    else:
             logger.error(f"Ошибка при сокращении ссылки: {response.text}")
             return payment_url
             
@@ -1338,26 +1350,26 @@ def subscribe_command(message):
     # Проверяем, есть ли уже активная подписка
     subscription = check_subscription_status(user_id)
     if subscription["status"] == "active":
-            markup = types.InlineKeyboardMarkup(row_width=1)
+        markup = types.InlineKeyboardMarkup(row_width=1)
             btn_status = types.InlineKeyboardButton('ℹ️ Проверить статус', callback_data='show_status')
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
             markup.add(btn_status)
             markup.add(btn_menu)
             
             try:
-                bot.edit_message_text(
+        bot.edit_message_text(
                         "У вас уже есть активная подписка!",
                         chat_id=message.chat.id,
                         message_id=message.message_id,
-                    reply_markup=markup
-                )
-            except Exception as e:
+            reply_markup=markup
+        )
+    except Exception as e:
                 bot.send_message(
                     message.chat.id,
                     "У вас уже есть активная подписка!",
                 reply_markup=markup
             )
-            return
+        return
     
     show_subscription_menu(message)
 
@@ -1370,8 +1382,8 @@ def start_command(message):
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
     # Отправляем приветственное сообщение
-    bot.send_message(
-        message.chat.id,
+            bot.send_message(
+                message.chat.id,
         MAIN_MESSAGE,
         parse_mode="HTML"
     )
