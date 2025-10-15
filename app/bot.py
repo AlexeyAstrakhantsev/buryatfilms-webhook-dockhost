@@ -913,8 +913,8 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
         # Добавляем кнопки для каждой доступной валюты
         for currency, amount in price_info["currencies"].items():
             currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
