@@ -291,6 +291,9 @@ def check_subscription_status(user_id):
             
             if status == 'removed':
                 return {"status": "removed", "end_date": end_date_str, "contract_id": parent_contract_id or contract_id}
+            
+            if status == 'cancelled':
+                return {"status": "cancelled", "end_date": end_date_str, "contract_id": parent_contract_id or contract_id}
 
             # Проверяем, не истекла ли подписка, обрабатывая возможные ошибки даты
             if end_date_str:
