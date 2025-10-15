@@ -1381,12 +1381,12 @@ def start_command(message):
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
     # Отправляем приветственное сообщение
-            bot.send_message(
-                message.chat.id,
+    bot.send_message(
+        message.chat.id,
         MAIN_MESSAGE,
         parse_mode="HTML"
     )
-    
+
     # Затем показываем меню
     show_main_menu(message)
 
