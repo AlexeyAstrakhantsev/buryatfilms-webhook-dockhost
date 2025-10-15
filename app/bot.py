@@ -553,21 +553,21 @@ def show_main_menu(message):
         markup.add(btn_about)
         markup.add(btn_support)
         
-        try:
-            bot.edit_message_text(
-        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-        reply_markup=markup,
-        parse_mode="HTML"
-            )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-        "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-        reply_markup=markup,
-        parse_mode="HTML"
-    )
+    try:
+        bot.edit_message_text(
+            "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        bot.send_message(
+            message.chat.id,
+            "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
 # Обработчик для кнопки отмены подписки
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
