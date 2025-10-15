@@ -3,7 +3,7 @@ import logging
 import sqlite3
 import requests
 import telebot
-from telebot import types
+from telebot import types, apihelper
 import threading
 import time
 from pathlib import Path
@@ -274,11 +274,11 @@ def check_subscription_status(user_id):
                 try:
                     end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
                     if end_date > datetime.now(timezone.utc):
-                        return {
+                return {
                             "status": status,  # Возвращаем фактический статус (active или cancelled)
                             "end_date": end_date_str,
-                            "contract_id": parent_contract_id or contract_id
-                        }
+                    "contract_id": parent_contract_id or contract_id
+                }
                 except ValueError as ve:
                     logger.error(f"Ошибка формата даты в check_subscription_status (member): {end_date_str} - {ve}")
                 except Exception as e:
@@ -639,7 +639,7 @@ def cancel_subscription_callback(call):
             try:
                 # Удаляем предыдущее сообщение с меню
                 bot.delete_message(call.message.chat.id, call.message.message_id)
-            except telebot.api_helper.ApiTelegramException as e:
+            except apihelper.ApiTelegramException as e:
                 logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
             
             # Отправляем запрос подтверждения
@@ -676,7 +676,7 @@ def cancel_subscription_callback(call):
             try:
                 # Удаляем предыдущее сообщение с меню
                 bot.delete_message(call.message.chat.id, call.message.message_id)
-            except telebot.api_helper.ApiTelegramException as e:
+            except apihelper.ApiTelegramException as e:
                 logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id} после отмены: {e}")
             
             # Отправляем сообщение об успешной отмене
@@ -715,7 +715,7 @@ def show_about_callback(call):
     try:
         # Удаляем предыдущее сообщение с меню
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except telebot.api_helper.ApiTelegramException as e:
+    except apihelper.ApiTelegramException as e:
         logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
     
     about_text = """В ЗАКРЫТОМ КАНАЛЕ:
@@ -761,7 +761,7 @@ def show_status_callback(call):
         try:
             # Удаляем предыдущее сообщение с меню
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except telebot.api_helper.ApiTelegramException as e:
+        except apihelper.ApiTelegramException as e:
             logger.warning(f"Не удалось удалить сообщение {call.message.message_id} в чате {call.message.chat.id}: {e}")
         
         user_id = call.from_user.id
@@ -913,8 +913,8 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
         # Добавляем кнопки для каждой доступной валюты
         for currency, amount in price_info["currencies"].items():
             currency_symbol = CURRENCY_TRANSLATIONS.get(currency, currency)
@@ -962,7 +962,7 @@ def shorten_payment_url(payment_url: str) -> str:
         if response.status_code == 200:
             short_code = response.json()["short_code"]
             return f"https://buryat-films.ru/payment/{short_code}"
-        else:
+    else:
             logger.error(f"Ошибка при сокращении ссылки: {response.text}")
             return payment_url
             
@@ -1356,14 +1356,14 @@ def subscribe_command(message):
         markup.add(btn_menu)
         
         try:
-            bot.edit_message_text(
+        bot.edit_message_text(
                 "У вас уже есть активная подписка!",
                 chat_id=message.chat.id,
                 message_id=message.message_id,
-                reply_markup=markup
-            )
-        except Exception as e:
-            bot.send_message(
+            reply_markup=markup
+        )
+    except Exception as e:
+                bot.send_message(
                 message.chat.id,
                 "У вас уже есть активная подписка!",
                 reply_markup=markup
@@ -1381,12 +1381,12 @@ def start_command(message):
     logger.info(f"Пользователь {username} (ID: {user_id}) запустил бота")
     
     # Отправляем приветственное сообщение
-    bot.send_message(
+        bot.send_message(
         message.chat.id,
         MAIN_MESSAGE,
         parse_mode="HTML"
     )
-
+    
     # Затем показываем меню
     show_main_menu(message)
 
