@@ -913,7 +913,7 @@ def process_payment_callback(call):
             raise ValueError("Информация о ценах не найдена")
         
         # Создаем кнопки выбора валюты
-    markup = types.InlineKeyboardMarkup(row_width=1)
+        markup = types.InlineKeyboardMarkup(row_width=1)
     
         # Добавляем кнопки для каждой доступной валюты
         for currency, amount in price_info["currencies"].items():
@@ -962,7 +962,7 @@ def shorten_payment_url(payment_url: str) -> str:
         if response.status_code == 200:
             short_code = response.json()["short_code"]
             return f"https://buryat-films.ru/payment/{short_code}"
-    else:
+        else:
             logger.error(f"Ошибка при сокращении ссылки: {response.text}")
             return payment_url
             
@@ -1356,14 +1356,14 @@ def subscribe_command(message):
         markup.add(btn_menu)
         
         try:
-        bot.edit_message_text(
+            bot.edit_message_text(
                 "У вас уже есть активная подписка!",
                 chat_id=message.chat.id,
                 message_id=message.message_id,
             reply_markup=markup
         )
-    except Exception as e:
-                bot.send_message(
+        except Exception as e:
+            bot.send_message(
                 message.chat.id,
                 "У вас уже есть активная подписка!",
                 reply_markup=markup
