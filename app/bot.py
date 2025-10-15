@@ -14,7 +14,7 @@ import json
 DATA_DIR = Path("/mount/database")
 DATA_DIR.mkdir(exist_ok=True)
 
-log_file = DATA_DIR / f"bot_{time.strftime('%Y%m%d')}.log"
+log_file = DATA_DIR / f"log_{time.strftime('%Y%m%d')}.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -250,6 +250,7 @@ def cancel_subscription(user_id, contract_id):
 
 # Функция для проверки статуса подписки пользователя
 def check_subscription_status(user_id):
+    conn = None  # Инициализируем conn вне try-блока
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -266,20 +267,27 @@ def check_subscription_status(user_id):
         member = cursor.fetchone()
         
         if member:
-            status, end_date, last_payment_id, contract_id, parent_contract_id = member
+            status, end_date_str, last_payment_id, contract_id, parent_contract_id = member
             
-            # Проверяем, не истекла ли подписка
-            if end_date and datetime.fromisoformat(end_date) > datetime.now(timezone.utc):
-                return {
-                    "status": status,  # Возвращаем фактический статус (active или cancelled)
-                    "end_date": end_date,
-                    "contract_id": parent_contract_id or contract_id
-                }
-        
-        # Если нет активной записи в channel_members, проверяем последний платеж
+            # Проверяем, не истекла ли подписка, обрабатывая возможные ошибки даты
+            if end_date_str:
+                try:
+                    end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    if end_date > datetime.now(timezone.utc):
+                        return {
+                            "status": status,  # Возвращаем фактический статус (active или cancelled)
+                            "end_date": end_date_str,
+                            "contract_id": parent_contract_id or contract_id
+                        }
+                except ValueError as ve:
+                    logger.error(f"Ошибка формата даты в check_subscription_status (member): {end_date_str} - {ve}")
+                except Exception as e:
+                    logger.error(f"Неожиданная ошибка при парсинге даты в check_subscription_status (member): {end_date_str} - {e}")
+            
+        # Если нет активной записи в channel_members или она истекла, проверяем последний платеж
         cursor.execute('''
         SELECT p.status, p.timestamp, p.event_type, cm.subscription_end_date,
-               p.contract_id, p.parent_contract_id
+               p.contract_id, p.parent_contract_id, p.amount
         FROM payments p
         LEFT JOIN channel_members cm ON cm.last_payment_id = p.id
         WHERE p.buyer_email = ?
@@ -289,28 +297,51 @@ def check_subscription_status(user_id):
         ''', (f"{user_id}@t.me",))
         
         payment = cursor.fetchone()
-        conn.close()
         
         if payment:
-            status, timestamp, event_type, end_date, contract_id, parent_contract_id = payment
+            status, timestamp_str, event_type, end_date_str_from_payment, contract_id, parent_contract_id, amount = payment
             
-            # Проверяем, что подписка активна и не истекла
-            is_active = (
-                status in ['subscription-active', 'active'] and
-                (end_date is None or datetime.fromisoformat(end_date) > datetime.now(timezone.utc))
-            )
+            # Если end_date_str_from_payment пуст, рассчитываем его на основе amount
+            if not end_date_str_from_payment and timestamp_str and amount is not None:
+                try:
+                    periodicity = get_periodicity_by_amount(amount)
+                    days = PERIOD_DAYS.get(periodicity, 30)
+                    start_date = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    end_date_calculated = (start_date + timedelta(days=days)).isoformat()
+                    end_date_str_from_payment = end_date_calculated
+                    logger.info(f"Рассчитана дата окончания подписки для {user_id} по последнему платежу: {end_date_calculated}")
+                except Exception as e:
+                    logger.error(f"Ошибка при расчете даты окончания по amount для {user_id}: {e}")
+                    end_date_str_from_payment = None # Очищаем, чтобы не использовать некорректную дату
+
+            is_active = False
+            if end_date_str_from_payment:
+                try:
+                    end_date = datetime.fromisoformat(end_date_str_from_payment.replace('Z', '+00:00'))
+                    if end_date > datetime.now(timezone.utc):
+                        is_active = True
+                except ValueError as ve:
+                    logger.error(f"Ошибка формата даты в check_subscription_status (payment): {end_date_str_from_payment} - {ve}")
+                except Exception as e:
+                    logger.error(f"Неожиданная ошибка при парсинге даты в check_subscription_status (payment): {end_date_str_from_payment} - {e}")
             
             return {
                 "status": "active" if is_active else "inactive",
-                "end_date": end_date,
+                "end_date": end_date_str_from_payment,
                 "contract_id": parent_contract_id or contract_id
             }
         
         return {"status": "no_subscription"}
         
+    except sqlite3.Error as sqle:
+        logger.error(f"Ошибка SQLite при проверке статуса подписки для {user_id}: {sqle}")
+        return {"status": "error", "error": f"Ошибка базы данных: {sqle}"}
     except Exception as e:
-        logger.error(f"Ошибка при проверке статуса подписки: {str(e)}")
-        return {"status": "error", "error": str(e)}
+        logger.error(f"Неожиданная ошибка при проверке статуса подписки для {user_id}: {str(e)}", exc_info=True)
+        return {"status": "error", "error": f"Неизвестная ошибка: {e}"}
+    finally:
+        if conn:
+            conn.close()
 
 # Функция для добавления пользователя в закрытый канал
 def add_user_to_channel(user_id):
@@ -667,10 +698,25 @@ def show_status_callback(call):
         user_id = call.from_user.id
         subscription = check_subscription_status(user_id)
         
+        if subscription["status"] == "error":
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ Произошла ошибка при проверке статуса подписки: {subscription["error"]}.\n"
+                f"Пожалуйста, попробуйте позже или обратитесь в поддержку."
+            )
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu'))
+            bot.send_message(
+                call.message.chat.id,
+                "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
+                reply_markup=markup
+            )
+            return
+
         if subscription["status"] in ["active", "cancelled"]:
             # Получаем дату окончания подписки
             end_date = subscription.get("end_date")
-            end_date_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "не указана"
+            end_date_str = datetime.fromisoformat(end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y") if end_date else "не указана"
             
             # Формируем сообщение в зависимости от статуса
             if subscription["status"] == "active":

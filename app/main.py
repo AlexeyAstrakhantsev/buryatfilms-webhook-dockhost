@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, Union
 import asyncio
@@ -21,7 +21,7 @@ import requests
 DATA_DIR = Path("/mount/database")
 DATA_DIR.mkdir(exist_ok=True)
 
-log_file = DATA_DIR / f"lava_webhook_{datetime.now().strftime('%Y%m%d')}.log"
+log_file = DATA_DIR / f"log_{time.strftime('%Y%m%d')}.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -350,7 +350,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         user_id = payload.buyer.email.split('@')[0]
         
         # Импортируем функции из bot.py
-        from bot import add_user_to_channel, notify_admin, bot
+        from bot import add_user_to_channel, notify_admin, bot, get_periodicity_by_amount, PERIOD_DAYS
         
         # Обрабатываем успешный платеж
         if payload.eventType == "payment.success":
@@ -375,6 +375,67 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             else:
                 logger.error(f"Не удалось добавить пользователя {user_id} в канал")
                 
+        # Обрабатываем автоматическое продление подписки
+        elif payload.eventType == "subscription.recurring.payment.success":
+            # Получаем текущую дату окончания подписки
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT subscription_end_date FROM channel_members WHERE user_id = ?", (user_id,))
+            current_end_date_str = cursor.fetchone()
+            conn.close()
+
+            if current_end_date_str:
+                current_end_date_str = current_end_date_str[0]
+                current_end_date = datetime.fromisoformat(current_end_date_str.replace('Z', '+00:00'))
+            else:
+                # Если текущая дата окончания не найдена, используем текущее время
+                current_end_date = datetime.now(timezone.utc)
+            
+            # Определяем периодичность по стоимости
+            periodicity = get_periodicity_by_amount(payload.amount)
+            days_to_add = PERIOD_DAYS.get(periodicity, 30)
+            
+            new_end_date = (current_end_date + timedelta(days=days_to_add)).isoformat()
+            
+            # Обновляем статус подписки в channel_members
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+            UPDATE channel_members 
+            SET status = 'active', 
+                subscription_end_date = ?
+            WHERE user_id = ?
+            ''', (new_end_date, user_id))
+            conn.commit()
+            conn.close()
+            
+            # Отправляем уведомление пользователю
+            # Импортируем types и CHANNEL_LINK
+            from bot import types, CHANNEL_LINK, show_main_menu
+
+            # Создаем клавиатуру с кнопками
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            btn_channel = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
+            btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
+            markup.add(btn_channel, btn_menu)
+
+            bot.send_message(
+                user_id,
+                f"✅ Ваша подписка '{payload.product.title}' автоматически продлена!\n"
+                f"Новая дата окончания: {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")}",
+                reply_markup=markup
+            )
+            
+            # Уведомляем администратора
+            notify_admin(
+                f"🔄 <b>Автопродление подписки</b>\n\n"
+                f"<b>Пользователь:</b> {user_id}\n"
+                f"<b>Подписка:</b> {payload.product.title}\n"
+                f"<b>Сумма:</b> {payload.amount} {payload.currency}\n"
+                f"<b>Новая дата окончания:</b> {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")}"
+            )
+            logger.info(f"Подписка пользователя {user_id} успешно продлена до {new_end_date}")
+
         # Обрабатываем неудачный платеж
         elif payload.eventType == "payment.failed":
             bot.send_message(
