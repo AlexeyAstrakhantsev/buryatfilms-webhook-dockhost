@@ -281,7 +281,7 @@ def check_subscription_status(user_id):
                p.contract_id, p.parent_contract_id
         FROM channel_members cm
         LEFT JOIN payments p ON p.id = cm.last_payment_id
-        WHERE cm.user_id = ? AND (cm.status = 'active' OR cm.status = 'cancelled')
+        WHERE cm.user_id = ?
         ''', (user_id,))
         
         member = cursor.fetchone()
@@ -289,6 +289,9 @@ def check_subscription_status(user_id):
         if member:
             status, end_date_str, last_payment_id, contract_id, parent_contract_id = member
             
+            if status == 'removed':
+                return {"status": "removed", "end_date": end_date_str, "contract_id": parent_contract_id or contract_id}
+
             # Проверяем, не истекла ли подписка, обрабатывая возможные ошибки даты
             if end_date_str:
                 try:
@@ -693,6 +696,11 @@ def cancel_subscription_callback(call):
 
             success, message = cancel_subscription(user_id, contract_id)
             if success:
+                # Если подписка была отменена (или уже была отменена), обновляем статус в объекте subscription
+                # Это нужно, чтобы дальнейшая логика отображения статуса для пользователя была корректной
+                if "Ваша подписка уже была отменена ранее" in message:
+                    subscription["status"] = "cancelled"
+
                 if subscription.get("end_date"):
                     end_date_str = datetime.fromisoformat(subscription["end_date"].replace('Z', '+00:00')).strftime("%d.%m.%Y")
                 else:
