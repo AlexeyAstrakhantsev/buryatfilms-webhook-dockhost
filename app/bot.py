@@ -532,18 +532,28 @@ def show_main_menu(message):
     # Проверяем статус подписки для определения доступных кнопок
     subscription = check_subscription_status(message.chat.id)
     
-    # Добавляем общие кнопки, которые видны всем
+    # Общие кнопки
     btn_about = types.InlineKeyboardButton('🔍 Подробнее о канале', callback_data='show_about')
-    btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
     
+    # Создаем кнопку поддержки только если SUPPORT_USERNAME задан
+    btn_support = None
+    if SUPPORT_USERNAME:
+        btn_support = types.InlineKeyboardButton('📞 Поддержка', url=f"https://t.me/{SUPPORT_USERNAME}")
+
     if subscription["status"] in ["active", "cancelled"]:
         # Кнопки для активной или отмененной подписки
         btn_status = types.InlineKeyboardButton('ℹ️ Статус подписки', callback_data='show_status')
-        btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
         markup.add(btn_status)
-        markup.add(btn_channel)
+        
+        # Создаем кнопку перехода в канал только если CHANNEL_LINK задан
+        if CHANNEL_LINK:
+            btn_channel = types.InlineKeyboardButton('📺 Перейти в канал', url=CHANNEL_LINK)
+            markup.add(btn_channel)
+            
         markup.add(btn_about)
-        markup.add(btn_support)
+        if btn_support: # Добавляем кнопку поддержки, если она была создана
+            markup.add(btn_support)
+        
     else:
         # Кнопки для неактивной подписки
         btn_subscribe = types.InlineKeyboardButton('💳 Оформить подписку', callback_data='show_subscribe')
@@ -551,23 +561,19 @@ def show_main_menu(message):
         markup.add(btn_subscribe)
         markup.add(btn_status)
         markup.add(btn_about)
-        markup.add(btn_support)
+        if btn_support: # Добавляем кнопку поддержки, если она была создана
+            markup.add(btn_support)
         
+    # Отправляем меню отдельным сообщением
     try:
-        bot.edit_message_text(
-            "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        bot.send_message(
+        bot.send_message( # Используем send_message для надежности
             message.chat.id,
             "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀",
             reply_markup=markup,
             parse_mode="HTML"
         )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке главного меню пользователю {message.chat.id}: {str(e)}")
 # Обработчик для кнопки отмены подписки
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_'))
 def cancel_subscription_callback(call):
@@ -650,8 +656,7 @@ def cancel_subscription_callback(call):
                 f"Автопродление будет отключено.",
                 reply_markup=markup
             )
-        return
-    
+        
         # Если это подтверждение отмены
         else:
             # Дополнительная проверка contract_id перед вызовом cancel_subscription
