@@ -701,7 +701,7 @@ def show_status_callback(call):
         if subscription["status"] == "error":
             bot.send_message(
                 call.message.chat.id,
-                f"❌ Произошла ошибка при проверке статуса подписки: {subscription["error"]}.\n"
+                f"❌ Произошла ошибка при проверке статуса подписки: {subscription['error']}.\n"
                 f"Пожалуйста, попробуйте позже или обратитесь в поддержку."
             )
             markup = types.InlineKeyboardMarkup()

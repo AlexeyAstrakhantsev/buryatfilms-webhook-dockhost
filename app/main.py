@@ -422,7 +422,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             bot.send_message(
                 user_id,
                 f"✅ Ваша подписка '{payload.product.title}' автоматически продлена!\n"
-                f"Новая дата окончания: {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime("%d.%m.%Y")}",
+                f"Новая дата окончания: {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime('%d.%m.%Y')}",
                 reply_markup=markup
             )
             
