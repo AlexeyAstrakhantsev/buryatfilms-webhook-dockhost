@@ -239,14 +239,34 @@ def cancel_subscription(user_id, contract_id):
             conn.commit()
             conn.close()
             
-            return True
+            return True, "✅ Автопродление подписки отключено."
         else:
+            # Парсим тело ответа, чтобы проверить конкретную ошибку
+            try:
+                error_response = response.json()
+                error_message = error_response.get("error", "")
+                if "Subscription cancelling error (have been already cancelled or not a subscription)" in error_message:
+                    logger.info(f"Подписка для пользователя {user_id} уже была отменена или не является подпиской. Обновляем статус в БД на 'cancelled'.")
+                    
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                    UPDATE channel_members 
+                    SET status = 'cancelled' 
+                    WHERE user_id = ? AND status = 'active'
+                    ''', (user_id,))
+                    conn.commit()
+                    conn.close()
+                    return True, "⚠️ Ваша подписка уже была отменена ранее." 
+            except json.JSONDecodeError:
+                pass # Не удалось распарсить JSON, обрабатываем как обычную ошибку
+
             logger.error(f"Ошибка при отмене подписки: код {response.status_code}, ответ: {response.text}")
-            return False
+            return False, f"❌ Произошла ошибка при отмене подписки: {response.text}. Попробуйте позже или обратитесь в поддержку."
             
     except Exception as e:
         logger.error(f"Ошибка при отмене подписки: {str(e)}")
-        return False
+        return False, f"❌ Произошла ошибка при отмене подписки: {str(e)}. Попробуйте позже или обратитесь в поддержку."
 
 # Функция для проверки статуса подписки пользователя
 def check_subscription_status(user_id):
@@ -656,23 +676,23 @@ def cancel_subscription_callback(call):
                 f"Автопродление будет отключено.",
                 reply_markup=markup
             )
-        
         # Если это подтверждение отмены
         else:
             # Дополнительная проверка contract_id перед вызовом cancel_subscription
-            if not contract_id: # contract_id уже извлечен выше, но стоит убедиться, что он не пуст
-                 logger.error(f"Пустой contract_id при подтвержденной отмене для user {user_id}.")
-                 bot.answer_callback_query(
-                     call.id,
-                     "❌ Не удалось отменить подписку: отсутствуют данные контракта."
-                 )
-                 bot.send_message(
-                     call.message.chat.id,
-                     "❌ Произошла ошибка при отмене подписки: отсутствуют данные контракта. Пожалуйста, обратитесь в поддержку."
-                 )
-                 return
+            if not contract_id:
+                logger.error(f"Пустой contract_id при подтвержденной отмене для user {user_id}.")
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Не удалось отменить подписку: отсутствуют данные контракта."
+                )
+                bot.send_message(
+                    call.message.chat.id,
+                    "❌ Произошла ошибка при отмене подписки: отсутствуют данные контракта. Пожалуйста, обратитесь в поддержку."
+                )
+                return
 
-            if cancel_subscription(user_id, contract_id):
+            success, message = cancel_subscription(user_id, contract_id)
+            if success:
                 if subscription.get("end_date"):
                     end_date_str = datetime.fromisoformat(subscription["end_date"].replace('Z', '+00:00')).strftime("%d.%m.%Y")
                 else:
@@ -688,9 +708,7 @@ def cancel_subscription_callback(call):
                 # Отправляем сообщение об успешной отмене
                 bot.send_message(
                     call.message.chat.id,
-                    f"✅ Автопродление подписки отключено.\n\n"
-                    f"Доступ к каналу сохранится до {end_date_str}.\n"
-                    f"После этой даты вы сможете оформить новую подписку. Мы всегда рады видеть Вас снова!"
+                    message
                 )
                 
                 # Показываем главное меню
@@ -705,7 +723,7 @@ def cancel_subscription_callback(call):
             else:
                 bot.answer_callback_query(
                     call.id,
-                    "❌ Произошла ошибка при отмене подписки. Попробуйте позже или обратитесь в поддержку."
+                    message
                 )
     except Exception as e:
         logger.error(f"Неожиданная ошибка при обработке отмены подписки для пользователя {user_id}: {str(e)}", exc_info=True)
