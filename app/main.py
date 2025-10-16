@@ -17,6 +17,22 @@ import base64
 import time
 import requests
 
+# Вспомогательная функция для нормализации строковых представлений дат
+def normalize_datetime_string(dt_str: Optional[str]) -> Optional[str]:
+    if not dt_str:
+        return None
+    try:
+        # Сначала пробуем парсить как ISO с часовым поясом
+        dt_obj = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+    except ValueError:
+        try:
+            # Если не удалось, пробуем парсить как naive datetime и делаем его aware в UTC
+            dt_obj = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+        except ValueError:
+            logger.warning(f"Не удалось распарсить дату: {dt_str}. Возвращаем исходную строку.")
+            return dt_str # В случае полной неудачи возвращаем исходную строку
+    return dt_obj.isoformat() # Всегда возвращаем в ISO формате с часовым поясом
+
 # Настройка логирования
 DATA_DIR = Path("/mount/database")
 DATA_DIR.mkdir(exist_ok=True)
@@ -162,7 +178,7 @@ def save_to_db(payload: WebhookPayload, raw_data: str) -> Optional[int]:
             payload.buyer.email,
             payload.contractId,
             payload.parentContractId,
-            payload.cancelledAt,
+            normalize_datetime_string(payload.cancelledAt), # Нормализуем дату
             'cancelled',
             raw_data,
             datetime.now().isoformat(),
@@ -189,11 +205,11 @@ def save_to_db(payload: WebhookPayload, raw_data: str) -> Optional[int]:
             payload.parentContractId,
             payload.amount,
             payload.currency,
-            payload.timestamp,
+            normalize_datetime_string(payload.timestamp), # Нормализуем дату
             payload.status,
             payload.errorMessage,
             raw_data,
-            datetime.now().isoformat()
+            datetime.now(timezone.utc).isoformat() # Используем aware datetime
         ))
         conn.commit()
         payment_id = cursor.lastrowid # Получаем ID только что вставленной записи
@@ -443,7 +459,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 subscription_end_date = ?
             WHERE user_id = ? AND status = 'active'
             ''', (
-                payload.willExpireAt,
+                normalize_datetime_string(payload.willExpireAt), # Нормализуем дату
                 user_id
             ))
             conn.commit()
@@ -453,7 +469,9 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             # Отправляем уведомление пользователю, если есть willExpireAt
             if payload.willExpireAt:
                 from bot import bot, types, show_main_menu
-                end_date_str = datetime.fromisoformat(payload.willExpireAt.replace('Z', '+00:00')).strftime('%d.%m.%Y')
+                # Используем normalize_datetime_string для получения корректной даты для отображения
+                normalized_will_expire_at = normalize_datetime_string(payload.willExpireAt)
+                end_date_str = datetime.fromisoformat(normalized_will_expire_at.replace('Z', '+00:00')).strftime("%d.%m.%Y") if normalized_will_expire_at else "не определена"
                 bot.send_message(
                     user_id,
                     f"ℹ️ Автопродление подписки отключено.\n\n"

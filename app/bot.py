@@ -1129,7 +1129,7 @@ def check_subscription_expiration():
         
         for member in active_members:
             user_id = member[0]
-            end_date = datetime.fromisoformat(member[1].replace('Z', '+00:00'))
+            end_date = datetime.fromisoformat(member[1].replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
             payment_status = member[2]
             event_type = member[3]
             
