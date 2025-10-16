@@ -141,10 +141,12 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
     return credentials.username
 
 # Сохранение данных в БД
-def save_to_db(payload: WebhookPayload, raw_data: str):
+def save_to_db(payload: WebhookPayload, raw_data: str) -> Optional[int]:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    payment_id = None
+
     if payload.eventType == "subscription.cancelled":
         # Для события отмены подписки
         cursor.execute('''
@@ -167,17 +169,9 @@ def save_to_db(payload: WebhookPayload, raw_data: str):
             0,  # amount для отмены не важен
             'RUB'  # валюта для отмены не важна
         ))
+        conn.commit()
+        payment_id = cursor.lastrowid # Получаем ID только что вставленной записи
         
-        # Обновляем статус в channel_members
-        cursor.execute('''
-        UPDATE channel_members 
-        SET status = 'cancelled',
-            subscription_end_date = ?
-        WHERE user_id = ? AND status = 'active'
-        ''', (
-            payload.willExpireAt,
-            payload.buyer.email.split('@')[0]
-        ))
     else:
         # Для остальных событий оставляем старую логику
         cursor.execute('''
@@ -201,10 +195,12 @@ def save_to_db(payload: WebhookPayload, raw_data: str):
             raw_data,
             datetime.now().isoformat()
         ))
+        conn.commit()
+        payment_id = cursor.lastrowid # Получаем ID только что вставленной записи
     
-    conn.commit()
     conn.close()
-    logger.info(f"Данные сохранены в БД: {payload.eventType}, contractId: {payload.contractId}")
+    logger.info(f"Данные сохранены в БД: {payload.eventType}, contractId: {payload.contractId}, Payment ID: {payment_id}")
+    return payment_id
 
 # Функция для генерации короткого кода
 def generate_short_code(url: str) -> str:
@@ -344,7 +340,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         payload = WebhookPayload.parse_raw(raw_data)
         
         # Сохраняем в БД
-        save_to_db(payload, raw_data)
+        payment_id = save_to_db(payload, raw_data)
         
         # Получаем user_id из email
         user_id = payload.buyer.email.split('@')[0]
@@ -403,9 +399,10 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             cursor.execute('''
             UPDATE channel_members 
             SET status = 'active', 
-                subscription_end_date = ?
+                subscription_end_date = ?,
+                last_payment_id = ?
             WHERE user_id = ?
-            ''', (new_end_date, user_id))
+            ''', (new_end_date, payment_id, user_id)) # Используем payment_id здесь
             conn.commit()
             conn.close()
             
@@ -436,6 +433,52 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 f"<b>Новая дата окончания:</b> {formatted_end_date}"
             )
             logger.info(f"Подписка пользователя {user_id} успешно продлена до {new_end_date}")
+
+        elif payload.eventType == "subscription.cancelled": # Добавляем обработку отмены подписки
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+            UPDATE channel_members 
+            SET status = 'cancelled',
+                subscription_end_date = ?
+            WHERE user_id = ? AND status = 'active'
+            ''', (
+                payload.willExpireAt,
+                user_id
+            ))
+            conn.commit()
+            conn.close()
+            logger.info(f"Статус подписки пользователя {user_id} обновлен на 'cancelled' (webhook)")
+
+            # Отправляем уведомление пользователю, если есть willExpireAt
+            if payload.willExpireAt:
+                from bot import bot, types, show_main_menu
+                end_date_str = datetime.fromisoformat(payload.willExpireAt.replace('Z', '+00:00')).strftime('%d.%m.%Y')
+                bot.send_message(
+                    user_id,
+                    f"ℹ️ Автопродление подписки отключено.\n\n"
+                    f"Доступ к каналу будет действовать до: {end_date_str}."
+                )
+                menu_message = bot.send_message(user_id, "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀")
+                show_main_menu(menu_message)
+                notify_admin(
+                    f"🔔 <b>Отмена подписки (через webhook)</b>\n\n"
+                    f"Пользователь: {user_id}\n"
+                    f"Доступ активен до: {end_date_str}"
+                )
+            else:
+                logger.warning(f"Отмена подписки для {user_id} через webhook, но без willExpireAt.")
+                bot.send_message(
+                    user_id,
+                    "ℹ️ Автопродление подписки отключено."
+                )
+                menu_message = bot.send_message(user_id, "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀")
+                show_main_menu(menu_message)
+                notify_admin(
+                    f"🔔 <b>Отмена подписки (через webhook)</b>\n\n"
+                    f"Пользователь: {user_id}\n"
+                    f"Доступ был отменен. (Дата окончания не указана)"
+                )
 
         # Обрабатываем неудачный платеж
         elif payload.eventType == "payment.failed":
