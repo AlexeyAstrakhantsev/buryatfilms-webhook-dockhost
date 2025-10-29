@@ -355,12 +355,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Парсим JSON
         payload = WebhookPayload.parse_raw(raw_data)
         logger.info(
-            "Webhook parsed | event=%s user=%s amount=%s currency=%s timestamp=%s contract=%s parent_contract=%s",
+            "Webhook parsed | event=%s user=%s amount=%s currency=%s payload_timestamp=%s webhook_received=%s contract=%s parent_contract=%s",
             payload.eventType,
             payload.buyer.email.split('@')[0] if payload.buyer and payload.buyer.email else "",
             str(payload.amount),
             payload.currency or "",
             payload.timestamp or payload.cancelledAt or "",
+            webhook_received_time.isoformat(),
             payload.contractId,
             payload.parentContractId or ""
         )
@@ -371,18 +372,21 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Получаем user_id из email
         user_id = payload.buyer.email.split('@')[0]
         
+        # Используем время получения вебхука вместо ненадежного timestamp из payload
+        webhook_received_time = datetime.now(timezone.utc)
+        
         # Импортируем функции из bot.py
         from bot import add_user_to_channel, notify_admin, bot, get_periodicity_by_amount, PERIOD_DAYS
         
         # Обрабатываем успешный платеж
         if payload.eventType == "payment.success":
             logger.info(
-                "payment.success received | user=%s product='%s' amount=%s %s at=%s",
+                "payment.success received | user=%s product='%s' amount=%s %s webhook_received=%s",
                 user_id,
                 payload.product.title,
                 str(payload.amount),
                 payload.currency or "",
-                payload.timestamp or ""
+                webhook_received_time.isoformat()
             )
             # Отправляем уведомление пользователю
             bot.send_message(
@@ -408,12 +412,12 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Обрабатываем автоматическое продление подписки
         elif payload.eventType == "subscription.recurring.payment.success":
             logger.info(
-                "recurring.success received | user=%s product='%s' amount=%s %s at=%s",
+                "recurring.success received | user=%s product='%s' amount=%s %s webhook_received=%s",
                 user_id,
                 payload.product.title,
                 str(payload.amount),
                 payload.currency or "",
-                payload.timestamp or ""
+                webhook_received_time.isoformat()
             )
             # Получаем текущую дату окончания подписки из БД
             conn = sqlite3.connect(DB_PATH)
@@ -432,11 +436,8 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 # В случае некорректного формата даты в БД — начинаем от текущего момента
                 current_end_date = datetime.now(timezone.utc)
 
-            # Время события продления (если отсутствует — используем текущее время)
-            try:
-                event_time = datetime.fromisoformat(normalize_datetime_string(payload.timestamp).replace('Z', '+00:00')) if payload.timestamp else datetime.now(timezone.utc)
-            except Exception:
-                event_time = datetime.now(timezone.utc)
+            # Используем время получения вебхука вместо ненадежного timestamp из payload
+            event_time = webhook_received_time
 
             # Определяем периодичность по сумме и рассчитываем длительность периода
             periodicity = get_periodicity_by_amount(payload.amount)
@@ -448,7 +449,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             new_end_date = new_end_date_dt.replace(tzinfo=new_end_date_dt.tzinfo or timezone.utc).isoformat()
 
             logger.info(
-                "recurring.compute | user=%s prev_end=%s event_time=%s base=%s add_days=%d new_end=%s",
+                "recurring.compute | user=%s prev_end=%s webhook_time=%s base=%s add_days=%d new_end=%s",
                 user_id,
                 (current_end_date.isoformat() if isinstance(current_end_date, datetime) else str(current_end_date)),
                 event_time.isoformat(),
@@ -505,11 +506,12 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
 
         elif payload.eventType == "subscription.cancelled": # Добавляем обработку отмены подписки
             logger.info(
-                "subscription.cancelled received | user=%s product='%s' at=%s willExpireAt=%s",
+                "subscription.cancelled received | user=%s product='%s' cancelledAt=%s willExpireAt=%s webhook_received=%s",
                 user_id,
                 payload.product.title,
                 payload.cancelledAt or "",
-                payload.willExpireAt or ""
+                payload.willExpireAt or "",
+                webhook_received_time.isoformat()
             )
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -561,11 +563,11 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Обрабатываем неудачный платеж
         elif payload.eventType == "payment.failed":
             logger.info(
-                "payment.failed received | user=%s product='%s' reason='%s' at=%s",
+                "payment.failed received | user=%s product='%s' reason='%s' webhook_received=%s",
                 user_id,
                 payload.product.title,
                 payload.errorMessage or "",
-                payload.timestamp or ""
+                webhook_received_time.isoformat()
             )
             bot.send_message(
                 user_id,
