@@ -389,26 +389,38 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 
         # Обрабатываем автоматическое продление подписки
         elif payload.eventType == "subscription.recurring.payment.success":
-            # Получаем текущую дату окончания подписки
+            # Получаем текущую дату окончания подписки из БД
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("SELECT subscription_end_date FROM channel_members WHERE user_id = ?", (user_id,))
-            current_end_date_str = cursor.fetchone()
+            current_end_date_row = cursor.fetchone()
             conn.close()
 
-            if current_end_date_str:
-                current_end_date_str = current_end_date_str[0]
-                current_end_date = datetime.fromisoformat(current_end_date_str.replace('Z', '+00:00'))
-            else:
-                # Если текущая дата окончания не найдена, используем текущее время
+            current_end_date: datetime
+            try:
+                if current_end_date_row and current_end_date_row[0]:
+                    current_end_date = datetime.fromisoformat(str(current_end_date_row[0]).replace('Z', '+00:00'))
+                else:
+                    current_end_date = datetime.now(timezone.utc)
+            except Exception:
+                # В случае некорректного формата даты в БД — начинаем от текущего момента
                 current_end_date = datetime.now(timezone.utc)
-            
-            # Определяем периодичность по стоимости
+
+            # Время события продления (если отсутствует — используем текущее время)
+            try:
+                event_time = datetime.fromisoformat(normalize_datetime_string(payload.timestamp).replace('Z', '+00:00')) if payload.timestamp else datetime.now(timezone.utc)
+            except Exception:
+                event_time = datetime.now(timezone.utc)
+
+            # Определяем периодичность по сумме и рассчитываем длительность периода
             periodicity = get_periodicity_by_amount(payload.amount)
             days_to_add = PERIOD_DAYS.get(periodicity, 30)
-            
-            new_end_date = (current_end_date + timedelta(days=days_to_add)).isoformat()
-            
+
+            # Продлеваем от максимума между текущим окончанием и временем события
+            base_date = current_end_date if current_end_date > event_time else event_time
+            new_end_date_dt = base_date + timedelta(days=days_to_add)
+            new_end_date = new_end_date_dt.replace(tzinfo=new_end_date_dt.tzinfo or timezone.utc).isoformat()
+
             # Обновляем статус подписки в channel_members
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -418,15 +430,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 subscription_end_date = ?,
                 last_payment_id = ?
             WHERE user_id = ?
-            ''', (new_end_date, payment_id, user_id)) # Используем payment_id здесь
+            ''', (new_end_date, payment_id, user_id))
             conn.commit()
             conn.close()
-            
+
             # Отправляем уведомление пользователю
-            # Импортируем types и CHANNEL_LINK
             from bot import types, CHANNEL_LINK, show_main_menu
 
-            # Создаем клавиатуру с кнопками
             markup = types.InlineKeyboardMarkup(row_width=1)
             btn_channel = types.InlineKeyboardButton('📺 Войти в канал', url=CHANNEL_LINK)
             btn_menu = types.InlineKeyboardButton('🔙 Главное меню', callback_data='show_menu')
@@ -435,12 +445,12 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             bot.send_message(
                 user_id,
                 f"✅ Ваша подписка '{payload.product.title}' автоматически продлена!\n"
-                f"Новая дата окончания: {datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime('%d.%m.%Y')}",
+                f"Новая дата окончания: {new_end_date_dt.strftime('%d.%m.%Y')}",
                 reply_markup=markup
             )
-            
+
             # Уведомляем администратора
-            formatted_end_date = datetime.fromisoformat(new_end_date.replace('Z', '+00:00')).strftime('%d.%m.%Y')
+            formatted_end_date = new_end_date_dt.strftime('%d.%m.%Y')
             notify_admin(
                 f"🔄 <b>Автопродление подписки</b>\n\n"
                 f"<b>Пользователь:</b> {user_id}\n"

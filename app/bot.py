@@ -385,7 +385,7 @@ def add_user_to_channel(user_id):
         SELECT id, timestamp, raw_data, amount
         FROM payments 
         WHERE buyer_email = ? 
-        AND (status = 'subscription-active' OR status = 'active')
+          AND event_type IN ('payment.success', 'subscription.recurring.payment.success')
         ORDER BY timestamp DESC
         LIMIT 1
         ''', (f"{user_id}@t.me",))
