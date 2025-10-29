@@ -354,6 +354,16 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         
         # Парсим JSON
         payload = WebhookPayload.parse_raw(raw_data)
+        logger.info(
+            "Webhook parsed | event=%s user=%s amount=%s currency=%s timestamp=%s contract=%s parent_contract=%s",
+            payload.eventType,
+            payload.buyer.email.split('@')[0] if payload.buyer and payload.buyer.email else "",
+            str(payload.amount),
+            payload.currency or "",
+            payload.timestamp or payload.cancelledAt or "",
+            payload.contractId,
+            payload.parentContractId or ""
+        )
         
         # Сохраняем в БД
         payment_id = save_to_db(payload, raw_data)
@@ -366,6 +376,14 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         
         # Обрабатываем успешный платеж
         if payload.eventType == "payment.success":
+            logger.info(
+                "payment.success received | user=%s product='%s' amount=%s %s at=%s",
+                user_id,
+                payload.product.title,
+                str(payload.amount),
+                payload.currency or "",
+                payload.timestamp or ""
+            )
             # Отправляем уведомление пользователю
             bot.send_message(
                 user_id,
@@ -389,6 +407,14 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 
         # Обрабатываем автоматическое продление подписки
         elif payload.eventType == "subscription.recurring.payment.success":
+            logger.info(
+                "recurring.success received | user=%s product='%s' amount=%s %s at=%s",
+                user_id,
+                payload.product.title,
+                str(payload.amount),
+                payload.currency or "",
+                payload.timestamp or ""
+            )
             # Получаем текущую дату окончания подписки из БД
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -421,6 +447,16 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             new_end_date_dt = base_date + timedelta(days=days_to_add)
             new_end_date = new_end_date_dt.replace(tzinfo=new_end_date_dt.tzinfo or timezone.utc).isoformat()
 
+            logger.info(
+                "recurring.compute | user=%s prev_end=%s event_time=%s base=%s add_days=%d new_end=%s",
+                user_id,
+                (current_end_date.isoformat() if isinstance(current_end_date, datetime) else str(current_end_date)),
+                event_time.isoformat(),
+                base_date.isoformat(),
+                days_to_add,
+                new_end_date
+            )
+
             # Обновляем статус подписки в channel_members
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -433,6 +469,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             ''', (new_end_date, payment_id, user_id))
             conn.commit()
             conn.close()
+
+            logger.info(
+                "recurring.persisted | user=%s status=active subscription_end_date=%s payment_id=%s",
+                user_id,
+                new_end_date,
+                str(payment_id)
+            )
 
             # Отправляем уведомление пользователю
             from bot import types, CHANNEL_LINK, show_main_menu
@@ -461,6 +504,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             logger.info(f"Подписка пользователя {user_id} успешно продлена до {new_end_date}")
 
         elif payload.eventType == "subscription.cancelled": # Добавляем обработку отмены подписки
+            logger.info(
+                "subscription.cancelled received | user=%s product='%s' at=%s willExpireAt=%s",
+                user_id,
+                payload.product.title,
+                payload.cancelledAt or "",
+                payload.willExpireAt or ""
+            )
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute('''
@@ -510,6 +560,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
 
         # Обрабатываем неудачный платеж
         elif payload.eventType == "payment.failed":
+            logger.info(
+                "payment.failed received | user=%s product='%s' reason='%s' at=%s",
+                user_id,
+                payload.product.title,
+                payload.errorMessage or "",
+                payload.timestamp or ""
+            )
             bot.send_message(
                 user_id,
                 f"❌ К сожалению, оплата подписки '{payload.product.title}' не удалась.\n"
