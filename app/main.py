@@ -352,6 +352,9 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         # Логируем входящие данные
         logger.info(f"Получены данные от lava.top: {raw_data}")
         
+        # Используем время получения вебхука вместо ненадежного timestamp из payload
+        webhook_received_time = datetime.now(timezone.utc)
+        
         # Парсим JSON
         payload = WebhookPayload.parse_raw(raw_data)
         logger.info(
@@ -371,9 +374,6 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
         
         # Получаем user_id из email
         user_id = payload.buyer.email.split('@')[0]
-        
-        # Используем время получения вебхука вместо ненадежного timestamp из payload
-        webhook_received_time = datetime.now(timezone.utc)
         
         # Импортируем функции из bot.py
         from bot import add_user_to_channel, notify_admin, bot, get_periodicity_by_amount, PERIOD_DAYS
