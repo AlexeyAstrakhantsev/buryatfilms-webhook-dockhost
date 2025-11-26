@@ -1185,8 +1185,10 @@ def check_subscription_expiration():
                 logger.error(f"Ошибка парсинга даты для пользователя {user_id}: {end_date_str} - {e}")
                 continue
             
-            # Вычисляем оставшиеся дни
+            # Вычисляем оставшиеся дни и факт истечения подписки
             days_left = (end_date - current_time).days
+            has_expired = end_date < current_time
+            days_after_expiry = (current_time - end_date).days if has_expired else 0
             
             try:
                 # Проверяем, является ли пользователь участником канала
@@ -1210,12 +1212,11 @@ def check_subscription_expiration():
                 
                 # Если пользователь в канале, проверяем срок подписки
                 if is_member:
-                    # Если подписка истекла и закончился льготный период
-                    if days_left < -GRACE_PERIOD_DAYS:
+                    if has_expired:
                         logger.info(
                             f"Удаление пользователя {user_id} из канала: "
                             f"подписка истекла {end_date_str}, "
-                            f"прошло дней после окончания: {-days_left}, "
+                            f"дней после окончания: {days_after_expiry}, "
                             f"статус в БД: {member_status}"
                         )
                         
@@ -1236,9 +1237,9 @@ def check_subscription_expiration():
                             try:
                                 bot.send_message(
                                     user_id,
-                                    "❌ Ваша подписка истекла, и льготный период подошел к концу.\n"
+                                    "❌ Срок действия вашей подписки истек.\n"
                                     "Доступ к каналу прекращен.\n"
-                                    "Для возобновления доступа используйте команду /subscribe"
+                                    "Чтобы вернуться, оформите новую подписку через /subscribe"
                                 )
                             except Exception as e:
                                 logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
@@ -1247,22 +1248,13 @@ def check_subscription_expiration():
                             notify_admin(
                                 f"<b>Пользователь удален из канала</b>\n\n"
                                 f"<b>ID пользователя:</b> {user_id}\n"
-                                f"<b>Причина:</b> Истекла подписка и льготный период\n"
+                                f"<b>Причина:</b> Истек срок подписки\n"
                                 f"<b>Дата окончания:</b> {end_date_str}\n"
                                 f"<b>Статус в БД:</b> {member_status}"
                             )
                         else:
                             logger.error(f"Не удалось удалить пользователя {user_id} из канала")
                             errors_count += 1
-                    
-                    # Если подписка истекла, но еще действует льготный период
-                    elif days_left < 0:
-                        days_grace_left = GRACE_PERIOD_DAYS + days_left
-                        logger.debug(
-                            f"Пользователь {user_id}: подписка истекла, "
-                            f"осталось дней льготного периода: {days_grace_left}"
-                        )
-                        # Уведомления отключены, но можно включить при необходимости
                     
                     # Уведомления о скором окончании подписки
                     #elif days_left in NOTIFY_BEFORE_DAYS:
