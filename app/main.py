@@ -388,6 +388,44 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 payload.currency or "",
                 webhook_received_time.isoformat()
             )
+            
+            # Рассчитываем дату окончания подписки от момента получения webhook'а
+            periodicity = get_periodicity_by_amount(payload.amount)
+            days_to_add = PERIOD_DAYS.get(periodicity, 30)
+            subscription_end_date_dt = webhook_received_time + timedelta(days=days_to_add)
+            subscription_end_date = subscription_end_date_dt.replace(tzinfo=subscription_end_date_dt.tzinfo or timezone.utc).isoformat()
+            
+            logger.info(
+                "payment.success.compute | user=%s webhook_time=%s add_days=%d end_date=%s",
+                user_id,
+                webhook_received_time.isoformat(),
+                days_to_add,
+                subscription_end_date
+            )
+            
+            # Обновляем БД с правильной датой окончания перед добавлением в канал
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+            INSERT OR REPLACE INTO channel_members 
+            (user_id, status, joined_at, subscription_end_date, last_payment_id)
+            VALUES (?, 'active', ?, ?, ?)
+            ''', (
+                user_id,
+                webhook_received_time.isoformat(),
+                subscription_end_date,
+                payment_id
+            ))
+            conn.commit()
+            conn.close()
+            
+            logger.info(
+                "payment.success.persisted | user=%s status=active subscription_end_date=%s payment_id=%s",
+                user_id,
+                subscription_end_date,
+                str(payment_id)
+            )
+            
             # Отправляем уведомление пользователю
             bot.send_message(
                 user_id,
@@ -443,17 +481,16 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             periodicity = get_periodicity_by_amount(payload.amount)
             days_to_add = PERIOD_DAYS.get(periodicity, 30)
 
-            # Продлеваем от максимума между текущим окончанием и временем события
-            base_date = current_end_date if current_end_date > event_time else event_time
-            new_end_date_dt = base_date + timedelta(days=days_to_add)
+            # Продлеваем подписку от момента получения webhook'а, добавляя период подписки
+            # Это гарантирует, что пользователь получает ровно столько времени, за сколько оплачена подписка
+            new_end_date_dt = event_time + timedelta(days=days_to_add)
             new_end_date = new_end_date_dt.replace(tzinfo=new_end_date_dt.tzinfo or timezone.utc).isoformat()
 
             logger.info(
-                "recurring.compute | user=%s prev_end=%s webhook_time=%s base=%s add_days=%d new_end=%s",
+                "recurring.compute | user=%s prev_end=%s webhook_time=%s add_days=%d new_end=%s",
                 user_id,
                 (current_end_date.isoformat() if isinstance(current_end_date, datetime) else str(current_end_date)),
                 event_time.isoformat(),
-                base_date.isoformat(),
                 days_to_add,
                 new_end_date
             )
@@ -542,7 +579,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 menu_message = bot.send_message(user_id, "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀")
                 show_main_menu(menu_message)
                 notify_admin(
-                    f"🔔 <b>Отмена подписки (через webhook)</b>\n\n"
+                    f"🔔 <b>Отмена подписки</b>\n\n"
                     f"Пользователь: {user_id}\n"
                     f"Доступ активен до: {end_date_str}"
                 )
@@ -555,7 +592,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 menu_message = bot.send_message(user_id, "⠀⠀⠀⠀⠀Меню подписчика⠀⠀⠀⠀⠀")
                 show_main_menu(menu_message)
                 notify_admin(
-                    f"🔔 <b>Отмена подписки (через webhook)</b>\n\n"
+                    f"🔔 <b>Отмена подписки</b>\n\n"
                     f"Пользователь: {user_id}\n"
                     f"Доступ был отменен. (Дата окончания не указана)"
                 )
