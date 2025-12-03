@@ -1145,6 +1145,14 @@ def check_subscription_expiration():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Убеждаемся, что таблица напоминаний существует
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscription_reminders (
+            user_id TEXT PRIMARY KEY,
+            last_reminder_at TEXT NOT NULL
+        )
+        ''')
+        
         # Получаем пользователей с активным или отмененным статусом, у которых есть дата окончания
         cursor.execute('''
         SELECT 
@@ -1189,6 +1197,7 @@ def check_subscription_expiration():
             days_left = (end_date - current_time).days
             has_expired = end_date < current_time
             days_after_expiry = (current_time - end_date).days if has_expired else 0
+            current_date_iso = current_time.date().isoformat()
             
             try:
                 # Проверяем, является ли пользователь участником канала
@@ -1199,63 +1208,99 @@ def check_subscription_expiration():
                     logger.warning(f"Не удалось проверить статус пользователя {user_id} в канале: {e}")
                     is_member = False
                 
-                # Если пользователь не в канале, но статус в БД активный - обновляем статус
+                # Если пользователь не в канале:
+                # - если подписка уже истекла и закончился льготный период, переводим в removed
+                # - если срок еще не истек, даем пользователю возможность вернуться в канал и не меняем статус
                 if not is_member and member_status in ['active', 'cancelled']:
+                    if has_expired and days_after_expiry >= GRACE_PERIOD_DAYS:
                     logger.info(f"Пользователь {user_id} не в канале, обновляем статус на 'removed'")
                     cursor.execute('''
                     UPDATE channel_members 
                     SET status = 'removed' 
                     WHERE user_id = ?
                     ''', (user_id,))
+                    cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
                     conn.commit()
+                    else:
+                        logger.debug(
+                            f"Пользователь {user_id} не в канале, но подписка еще действует "
+                            f"(истекла: {has_expired}, дней после окончания: {days_after_expiry}). "
+                            f"Оставляем статус {member_status}."
+                        )
                     continue
                 
                 # Если пользователь в канале, проверяем срок подписки
                 if is_member:
                     if has_expired:
+                        if days_after_expiry >= GRACE_PERIOD_DAYS:
                         logger.info(
-                            f"Удаление пользователя {user_id} из канала: "
-                            f"подписка истекла {end_date_str}, "
-                            f"дней после окончания: {days_after_expiry}, "
-                            f"статус в БД: {member_status}"
-                        )
-                        
-                        # Удаляем пользователя из канала
-                        result = remove_user_from_channel(user_id)
-                        
-                        if result:
-                            # Обновляем статус в БД
-                            cursor.execute('''
-                            UPDATE channel_members 
-                            SET status = 'removed' 
-                            WHERE user_id = ?
-                            ''', (user_id,))
-                            conn.commit()
-                            removed_count += 1
-                            
-                            # Уведомляем пользователя
-                            try:
-                                bot.send_message(
-                                    user_id,
-                                    "❌ Срок действия вашей подписки истек.\n"
-                                    "Доступ к каналу прекращен.\n"
-                                    "Чтобы вернуться, оформите новую подписку через /subscribe"
-                                )
-                            except Exception as e:
-                                logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
-                            
-                            # Уведомляем администратора
-                            notify_admin(
-                                f"<b>Пользователь удален из канала</b>\n\n"
-                                f"<b>ID пользователя:</b> {user_id}\n"
-                                f"<b>Причина:</b> Истек срок подписки\n"
-                                f"<b>Дата окончания:</b> {end_date_str}\n"
-                                f"<b>Статус в БД:</b> {member_status}"
+                                f"Удаление пользователя {user_id} из канала: "
+                                f"подписка истекла {end_date_str}, "
+                                f"дней после окончания: {days_after_expiry}, "
+                                f"статус в БД: {member_status}"
                             )
+                            
+                            # Удаляем пользователя из канала
+                            result = remove_user_from_channel(user_id)
+                            
+                            if result:
+                                # Обновляем статус в БД
+                                cursor.execute('''
+                                UPDATE channel_members 
+                                SET status = 'removed' 
+                                WHERE user_id = ?
+                                ''', (user_id,))
+                                cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
+                                conn.commit()
+                                removed_count += 1
+                                
+                                # Уведомляем пользователя
+                                try:
+                                    bot.send_message(
+                                        user_id,
+                                        "❌ Срок действия вашей подписки истек.\n"
+                                        "Доступ к каналу прекращен.\n"
+                                        "Чтобы вернуться, оформите новую подписку через /subscribe"
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+                                
+                                # Уведомляем администратора
+                                notify_admin(
+                                    f"<b>Пользователь удален из канала</b>\n\n"
+                                    f"<b>ID пользователя:</b> {user_id}\n"
+                                    f"<b>Причина:</b> Истек срок подписки\n"
+                                    f"<b>Дата окончания:</b> {end_date_str}\n"
+                                    f"<b>Статус в БД:</b> {member_status}"
+                                )
+                            else:
+                                logger.error(f"Не удалось удалить пользователя {user_id} из канала")
+                                errors_count += 1
                         else:
-                            logger.error(f"Не удалось удалить пользователя {user_id} из канала")
-                            errors_count += 1
-                    
+                            # Отправляем напоминание один раз в день
+                            should_notify = False
+                            cursor.execute('SELECT last_reminder_at FROM subscription_reminders WHERE user_id = ?', (user_id,))
+                            reminder_row = cursor.fetchone()
+                            if not reminder_row or reminder_row[0] != current_date_iso:
+                                should_notify = True
+                                cursor.execute('''
+                                INSERT INTO subscription_reminders (user_id, last_reminder_at)
+                                VALUES (?, ?)
+                                ON CONFLICT(user_id) DO UPDATE SET last_reminder_at=excluded.last_reminder_at
+                                ''', (user_id, current_date_iso))
+                                conn.commit()
+                            
+                            if should_notify:
+                                days_grace_left = max(0, GRACE_PERIOD_DAYS - days_after_expiry)
+                                try:
+                                    bot.send_message(
+                                        user_id,
+                                        "⚠️ Ваша подписка истекла.\n"
+                                        f"У вас есть еще {days_grace_left} дн. льготного периода для продления.\n"
+                                        "Чтобы сохранить доступ, оформите новую подписку через /subscribe."
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Не удалось отправить напоминание пользователю {user_id}: {e}")
                     # Уведомления о скором окончании подписки
                     #elif days_left in NOTIFY_BEFORE_DAYS:
                         #bot.send_message(

@@ -124,6 +124,14 @@ def init_db():
         )
         ''')
         
+        # Таблица для отслеживания напоминаний о продлении
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscription_reminders (
+            user_id TEXT PRIMARY KEY,
+            last_reminder_at TEXT NOT NULL
+        )
+        ''')
+        
         # Создаем таблицу для сокращенных ссылок
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS shortened_links (
@@ -416,6 +424,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 subscription_end_date,
                 payment_id
             ))
+            cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
             conn.commit()
             conn.close()
             
@@ -505,6 +514,7 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 last_payment_id = ?
             WHERE user_id = ?
             ''', (new_end_date, payment_id, user_id))
+            cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
             conn.commit()
             conn.close()
 
@@ -680,6 +690,13 @@ async def reset_database(request: Request, username: str = Depends(verify_creden
             subscription_end_date TEXT,
             last_payment_id INTEGER,
             FOREIGN KEY (last_payment_id) REFERENCES payments(id)
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscription_reminders (
+            user_id TEXT PRIMARY KEY,
+            last_reminder_at TEXT NOT NULL
         )
         ''')
         
