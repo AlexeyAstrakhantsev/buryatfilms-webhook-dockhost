@@ -1213,14 +1213,14 @@ def check_subscription_expiration():
                 # - если срок еще не истек, даем пользователю возможность вернуться в канал и не меняем статус
                 if not is_member and member_status in ['active', 'cancelled']:
                     if has_expired and days_after_expiry >= GRACE_PERIOD_DAYS:
-                    logger.info(f"Пользователь {user_id} не в канале, обновляем статус на 'removed'")
-                    cursor.execute('''
-                    UPDATE channel_members 
-                    SET status = 'removed' 
-                    WHERE user_id = ?
-                    ''', (user_id,))
-                    cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
-                    conn.commit()
+                        logger.info(f"Пользователь {user_id} не в канале, обновляем статус на 'removed'")
+                        cursor.execute('''
+                        UPDATE channel_members 
+                        SET status = 'removed' 
+                        WHERE user_id = ?
+                        ''', (user_id,))
+                        cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
+                        conn.commit()
                     else:
                         logger.debug(
                             f"Пользователь {user_id} не в канале, но подписка еще действует "
@@ -1233,7 +1233,7 @@ def check_subscription_expiration():
                 if is_member:
                     if has_expired:
                         if days_after_expiry >= GRACE_PERIOD_DAYS:
-                        logger.info(
+                            logger.info(
                                 f"Удаление пользователя {user_id} из канала: "
                                 f"подписка истекла {end_date_str}, "
                                 f"дней после окончания: {days_after_expiry}, "
