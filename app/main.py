@@ -562,6 +562,13 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
             )
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
+            
+            # Проверяем текущий статус перед обновлением
+            cursor.execute('SELECT status FROM channel_members WHERE user_id = ?', (user_id,))
+            current_status_row = cursor.fetchone()
+            current_status = current_status_row[0] if current_status_row else None
+            
+            # Обновляем статус только если он был 'active' (чтобы не обрабатывать повторные webhook'и)
             cursor.execute('''
             UPDATE channel_members 
             SET status = 'cancelled',
@@ -571,12 +578,22 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                 normalize_datetime_string(payload.willExpireAt), # Нормализуем дату
                 user_id
             ))
+            rows_updated = cursor.rowcount
             conn.commit()
             conn.close()
-            logger.info(f"Статус подписки пользователя {user_id} обновлен на 'cancelled' (webhook)")
+            
+            # Отправляем уведомление только если статус действительно изменился
+            # (rows_updated > 0 означает, что была обновлена запись со статусом 'active')
+            if rows_updated == 0:
+                logger.info(
+                    f"Webhook об отмене подписки для пользователя {user_id} уже был обработан ранее "
+                    f"(текущий статус: {current_status}). Пропускаем отправку уведомлений."
+                )
+            else:
+                logger.info(f"Статус подписки пользователя {user_id} обновлен на 'cancelled' (webhook)")
 
-            # Отправляем уведомление пользователю, если есть willExpireAt
-            if payload.willExpireAt:
+            # Отправляем уведомление пользователю только если статус изменился
+            if rows_updated > 0 and payload.willExpireAt:
                 from bot import bot, types, show_main_menu
                 # Используем normalize_datetime_string для получения корректной даты для отображения
                 normalized_will_expire_at = normalize_datetime_string(payload.willExpireAt)
@@ -593,7 +610,8 @@ async def lava_webhook(request: Request, username: str = Depends(verify_credenti
                     f"Пользователь: {user_id}\n"
                     f"Доступ активен до: {end_date_str}"
                 )
-            else:
+            elif rows_updated > 0:
+                # Отправляем уведомление только если статус изменился и нет willExpireAt
                 logger.warning(f"Отмена подписки для {user_id} через webhook, но без willExpireAt.")
                 bot.send_message(
                     user_id,
