@@ -1213,14 +1213,41 @@ def check_subscription_expiration():
                 # - если срок еще не истек, даем пользователю возможность вернуться в канал и не меняем статус
                 if not is_member and member_status in ['active', 'cancelled']:
                     if has_expired and days_after_expiry >= GRACE_PERIOD_DAYS:
-                        logger.info(f"Пользователь {user_id} не в канале, обновляем статус на 'removed'")
+                        # Обновляем статус только если он еще не 'removed'
                         cursor.execute('''
                         UPDATE channel_members 
                         SET status = 'removed' 
-                        WHERE user_id = ?
+                        WHERE user_id = ? AND status != 'removed'
                         ''', (user_id,))
+                        rows_updated = cursor.rowcount
                         cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
                         conn.commit()
+                        
+                        # Отправляем уведомления только если статус действительно изменился
+                        if rows_updated > 0:
+                            logger.info(f"Пользователь {user_id} не в канале, обновляем статус на 'removed'")
+                            # Уведомляем пользователя
+                            try:
+                                bot.send_message(
+                                    user_id,
+                                    "❌ Срок действия вашей подписки истек.\n"
+                                    "Доступ к каналу прекращен.\n"
+                                    "Чтобы вернуться, оформите новую подписку через /subscribe"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+                            
+                            # Уведомляем администратора
+                            notify_admin(
+                                f"<b>Пользователь удален из канала</b>\n\n"
+                                f"<b>ID пользователя:</b> {user_id}\n"
+                                f"<b>Причина:</b> Истек срок подписки\n"
+                                f"<b>Дата окончания:</b> {end_date_str}\n"
+                                f"<b>Предыдущий статус:</b> {member_status}\n"
+                                f"<b>Новый статус:</b> removed"
+                            )
+                        else:
+                            logger.debug(f"Пользователь {user_id} уже имеет статус 'removed', пропускаем уведомления")
                     else:
                         logger.debug(
                             f"Пользователь {user_id} не в канале, но подписка еще действует "
@@ -1244,35 +1271,42 @@ def check_subscription_expiration():
                             result = remove_user_from_channel(user_id)
                             
                             if result:
-                                # Обновляем статус в БД
+                                # Обновляем статус в БД только если он еще не 'removed'
                                 cursor.execute('''
                                 UPDATE channel_members 
                                 SET status = 'removed' 
-                                WHERE user_id = ?
+                                WHERE user_id = ? AND status != 'removed'
                                 ''', (user_id,))
+                                rows_updated = cursor.rowcount
                                 cursor.execute('DELETE FROM subscription_reminders WHERE user_id = ?', (user_id,))
                                 conn.commit()
-                                removed_count += 1
                                 
-                                # Уведомляем пользователя
-                                try:
-                                    bot.send_message(
-                                        user_id,
-                                        "❌ Срок действия вашей подписки истек.\n"
-                                        "Доступ к каналу прекращен.\n"
-                                        "Чтобы вернуться, оформите новую подписку через /subscribe"
+                                # Отправляем уведомления только если статус действительно изменился
+                                if rows_updated > 0:
+                                    removed_count += 1
+                                    
+                                    # Уведомляем пользователя
+                                    try:
+                                        bot.send_message(
+                                            user_id,
+                                            "❌ Срок действия вашей подписки истек.\n"
+                                            "Доступ к каналу прекращен.\n"
+                                            "Чтобы вернуться, оформите новую подписку через /subscribe"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+                                    
+                                    # Уведомляем администратора
+                                    notify_admin(
+                                        f"<b>Пользователь удален из канала</b>\n\n"
+                                        f"<b>ID пользователя:</b> {user_id}\n"
+                                        f"<b>Причина:</b> Истек срок подписки\n"
+                                        f"<b>Дата окончания:</b> {end_date_str}\n"
+                                        f"<b>Предыдущий статус:</b> {member_status}\n"
+                                        f"<b>Новый статус:</b> removed"
                                     )
-                                except Exception as e:
-                                    logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
-                                
-                                # Уведомляем администратора
-                                notify_admin(
-                                    f"<b>Пользователь удален из канала</b>\n\n"
-                                    f"<b>ID пользователя:</b> {user_id}\n"
-                                    f"<b>Причина:</b> Истек срок подписки\n"
-                                    f"<b>Дата окончания:</b> {end_date_str}\n"
-                                    f"<b>Статус в БД:</b> {member_status}"
-                                )
+                                else:
+                                    logger.debug(f"Пользователь {user_id} уже имеет статус 'removed', пропускаем уведомления")
                             else:
                                 logger.error(f"Не удалось удалить пользователя {user_id} из канала")
                                 errors_count += 1
